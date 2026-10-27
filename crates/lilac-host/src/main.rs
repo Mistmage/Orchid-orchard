@@ -183,6 +183,22 @@ fn dispatch(records_root: &std::path::Path, method: &str, params: Value) -> Resu
             );
             Ok(json!({ "count": idx.records.len() }))
         }
+        "open_folder" => {
+            let target = params
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| records_root.to_path_buf());
+            let target = match target.to_string_lossy().as_ref() {
+                "records" => records_root.to_path_buf(),
+                "config" => config::config_root(),
+                "" => records_root.to_path_buf(),
+                _ => target,
+            };
+            std::fs::create_dir_all(&target).ok();
+            open_in_file_manager(&target)?;
+            Ok(json!({ "path": target.to_string_lossy() }))
+        }
         _ => Err(format!("unknown method: {}", method)),
     }
 }
@@ -203,6 +219,31 @@ fn generate_id(records_root: &std::path::Path) -> String {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     format!("rec_{}", chrono::Utc::now().timestamp_millis())
+}
+
+fn open_in_file_manager(path: &std::path::Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn find_record_path(records_root: &std::path::Path, id: &str) -> Option<PathBuf> {

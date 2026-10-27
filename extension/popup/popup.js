@@ -90,4 +90,16 @@ $("#saveSelected").addEventListener("click", async () => {
   render();
 });
 
+$("#openFolder").addEventListener("click", async () => {
+  setStatus("Opening folder...");
+  const resp = await call("openFolder", { which: "records" });
+  if (resp && resp.ok) {
+    const cfg = await call("getConfig");
+    const p = (cfg && cfg.result && cfg.result.records_root) || (resp.result && resp.result.path);
+    setStatus("Records: " + p);
+  } else {
+    setStatus("Error: " + (resp && resp.error));
+  }
+});
+
 render();

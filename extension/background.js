@@ -105,6 +105,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       } else if (msg.type === "getConfig") {
         const res = await send("get_config", {});
         sendResponse({ ok: true, result: res });
+      } else if (msg.type === "openFolder") {
+        const res = await send("open_folder", { path: msg.which || "records" });
+        sendResponse({ ok: true, result: res });
       } else if (msg.type === "reopenRecord") {
         const res = await send("load_record", { id: msg.id });
         const rec = res && res.record;
