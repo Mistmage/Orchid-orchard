@@ -3,8 +3,8 @@ mod config;
 use base64::Engine;
 use config::{load_config, logs_dir, set_records_root};
 use lilac_core::{
-    NamingConfig, NamingRule, Record, delete_record, read_record, rebuild_index, record_path,
-    search_records, write_record,
+    NamingConfig, NamingRule, Record, apply_rules as apply_rules_core, delete_record, parse_rules,
+    read_record, rebuild_index, record_path, search_records, write_record,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -244,6 +244,23 @@ fn dispatch(records_root: &std::path::Path, method: &str, params: Value) -> Resu
                 .unwrap_or_default();
             let cfg = NamingConfig { rules: vec![rule] };
             Ok(json!({ "title": cfg.derive_title(&record) }))
+        }
+        "apply_rules" => {
+            let record_val = params.get("record").cloned().ok_or("missing record")?;
+            let mut record: Record =
+                serde_json::from_value(record_val).map_err(|e| e.to_string())?;
+            let rules_text = if let Some(t) = params.get("rules").and_then(|v| v.as_str()) {
+                t.to_string()
+            } else {
+                std::fs::read_to_string(config::rules_path()).unwrap_or_default()
+            };
+            let ruleset = parse_rules(&rules_text).map_err(|e| e.to_string())?;
+            let fired = apply_rules_core(&mut record, &ruleset.rules);
+            let fired_json: Vec<Value> = fired
+                .iter()
+                .map(|a| json!({ "action": format!("{:?}", a) }))
+                .collect();
+            Ok(json!({ "record": record, "fired": fired_json }))
         }
         _ => Err(format!("unknown method: {}", method)),
     }

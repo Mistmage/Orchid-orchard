@@ -86,11 +86,27 @@ async function openEditor(id) {
       <div class="row">
         <button id="e-save">Save</button>
         <button id="e-cancel">Cancel</button>
+        <button id="e-applyrules">Apply rules</button>
       </div>
     </div>
   `;
   list.innerHTML = html;
   on("#e-cancel", "click", render);
+  const applyBtn = $("#e-applyrules");
+  if (applyBtn) applyBtn.addEventListener("click", async () => {
+    const record = { id: r.id, type: r.type, title: $("#e-title").value, url: r.url, tags: $("#e-tags").value.split(",").map((s) => s.trim()).filter(Boolean), status: $("#e-status").value || null };
+    const resp = await call("applyRules", { record });
+    if (resp && resp.ok && resp.result && resp.result.record) {
+      const nr = resp.result.record;
+      $("#e-title").value = nr.title || "";
+      $("#e-tags").value = (nr.tags || []).join(", ");
+      $("#e-status").value = nr.status || "";
+      $("#e-body").value = resp.result.record.body || $("#e-body").value;
+      setStatus("Applied " + (resp.result.fired ? resp.result.fired.length : 0) + " rules");
+    } else {
+      setStatus("Error: " + (resp && resp.error));
+    }
+  });
   const autoBtn = $("#e-autoname");
   if (autoBtn) autoBtn.addEventListener("click", async () => {
     const record = { type: r.type, title: r.title, url: r.url, tags: r.tags || [] };

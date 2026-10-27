@@ -49,7 +49,7 @@ When Orchid arrives, a Lilac record is just a record with `type: page`/`collecti
 - Block identity is type-aware: headings get IDs eagerly; `---` separators and other blocks only when referenced (lazy); YAML frontmatter IDs eager. Content hash as fallback.
 - **Rendering contract is a scene graph, not a command/event protocol.** Rust emits the view tree (the block tree is the scene graph for v0); renderers (Tauri webview, future native) paint it. This avoids a second source of truth and makes renderer swaps trivial. (Think Blitz-style display list.)
 - Timing: editor/parser can start against a mock store now; storage integration waits for Lilac's block-level evolution.
-- Later, Wisteria does the same pattern (Rust authority, scene-graph renderer). Wisteria later embeds a Chromium backend (Tauri -> Chromium is the progression). "webtau" for static routing between Orchid and Wisteria views — if this is a specific tool, point me at it.
+- Later, Wisteria does the same pattern (Rust authority, scene-graph renderer). Wisteria later embeds a Chromium backend (Tauri -> Chromium is the progression). (static routing) for static routing between Orchid and Wisteria views — if this is a specific tool, point me at it.
 
 ## Implementation status
 

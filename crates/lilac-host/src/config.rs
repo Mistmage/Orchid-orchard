@@ -97,4 +97,8 @@ pub fn logs_dir() -> PathBuf {
     config_root().join("logs")
 }
 
+pub fn rules_path() -> PathBuf {
+    config_root().join("rules.txt")
+}
+
 pub fn _ensure_parent(_p: &Path) {}
