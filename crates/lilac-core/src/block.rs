@@ -100,7 +100,8 @@ pub fn block_hash(block: &Block) -> String {
 /// span is invalid.
 pub fn apply_block_edit(text: &str, block_id: &str, new_content: &str) -> Result<String, String> {
     let blocks = parse_blocks(text);
-    let block = find_block(&blocks, block_id).ok_or_else(|| format!("block not found: {}", block_id))?;
+    let block =
+        find_block(&blocks, block_id).ok_or_else(|| format!("block not found: {}", block_id))?;
     let (start, end) = block.span;
     if start > end || end > text.len() {
         return Err(format!("invalid span for block {}", block_id));
@@ -435,7 +436,7 @@ mod tests {
     fn apply_block_edit_single() {
         let text = "# Hi\n\npara\n";
         let blocks = parse_blocks(text);
-        let b = find_block(&blocks, "hi").unwrap();
+        let _b = find_block(&blocks, "hi").unwrap();
         let out = apply_block_edit(text, "hi", "# Hello\n").unwrap();
         assert_eq!(out, "# Hello\n\npara\n");
     }
@@ -449,7 +450,10 @@ mod tests {
     #[test]
     fn apply_block_edits_sequential() {
         let text = "# A\n\n# B\n";
-        let edits = vec![("a".to_string(), "# A1\n".to_string()), ("b".to_string(), "# B1\n".to_string())];
+        let edits = vec![
+            ("a".to_string(), "# A1\n".to_string()),
+            ("b".to_string(), "# B1\n".to_string()),
+        ];
         let out = apply_block_edits(text, &edits).unwrap();
         assert!(out.contains("A1"));
         assert!(out.contains("B1"));

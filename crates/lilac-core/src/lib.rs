@@ -2,6 +2,7 @@
 
 pub mod block;
 pub mod collection;
+pub mod editor;
 pub mod error;
 pub mod naming;
 pub mod record;
@@ -10,10 +11,11 @@ pub mod storage;
 pub mod wal;
 
 pub use block::{
-    apply_block_edit, apply_block_edits, Block, BlockKind, block_hash, find_block, parse_blocks,
+    Block, BlockKind, apply_block_edit, apply_block_edits, block_hash, find_block, parse_blocks,
     reconcile_blocks, reconcile_text, splice_block,
 };
 pub use collection::{CollectionItem, parse_collection_body, render_collection_body};
+pub use editor::BlockEditor;
 pub use error::Error;
 pub use naming::{NamingConfig, NamingRule};
 pub use record::Record;
