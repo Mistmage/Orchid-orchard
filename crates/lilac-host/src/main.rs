@@ -384,6 +384,13 @@ fn apply_patch(rec: &mut Record, patch: &Value) {
     if let Some(v) = patch.get("description").and_then(|x| x.as_str()) {
         rec.description = Some(v.to_string());
     }
+    if let Some(v) = patch.get("folder").and_then(|x| x.as_str()) {
+        if v.trim().is_empty() {
+            rec.folder = None;
+        } else {
+            rec.folder = Some(v.trim().to_string());
+        }
+    }
     // open metadata: merge remaining keys into extra
     if let Some(obj) = patch.as_object() {
         for (k, v) in obj {

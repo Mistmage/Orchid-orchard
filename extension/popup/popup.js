@@ -36,7 +36,7 @@ function recordCard(r) {
   return `
     <div class="item" data-id="${escape(r.id)}">
       <div class="title">${escape(r.title || r.id)}</div>
-      <div class="url">${escape(r.id)} · ${escape(r.type)}${r.status ? " · " + escape(r.status) : ""}</div>
+      <div class="url">${escape(r.id)} · ${escape(r.type)}${r.status ? " · " + escape(r.status) : ""}${r.folder ? " · 📁" + escape(r.folder) : ""}</div>
       <div class="tags">${(r.tags || []).map(escape).join(", ")}</div>
       <div class="row">
         <button data-open="${escape(r.id)}">Open</button>
@@ -82,6 +82,7 @@ async function openEditor(id) {
       <button id="e-autoname" style="margin:4px 0;">Auto-name</button><br>
       <label>Tags (comma)<br><input id="e-tags" value="${escape(tags)}" style="width:100%" /></label><br>
       <label>Status<br><input id="e-status" value="${escape(r.status || "")}" style="width:100%" /></label><br>
+      <label>Folder (relative to Records/)<br><input id="e-folder" value="${escape(r.folder || "")}" style="width:100%" /></label><br>
       <label>Notes<br><textarea id="e-body" style="width:100%; height:80px;">${escape(body)}</textarea></label><br>
       <div class="row">
         <button id="e-save">Save</button>
@@ -119,6 +120,7 @@ async function openEditor(id) {
       title: $("#e-title").value,
       tags: $("#e-tags").value.split(",").map((s) => s.trim()).filter(Boolean),
       status: $("#e-status").value || null,
+      folder: $("#e-folder").value || null,
     };
     const newBody = $("#e-body").value;
     const r2 = await call("updateRecord", { id, patch, body: newBody });
