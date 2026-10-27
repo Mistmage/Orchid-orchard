@@ -219,6 +219,11 @@ $("#openFolder").addEventListener("click", async () => {
   }
 });
 
+$("#openManager").addEventListener("click", async () => {
+  const url = chrome.runtime.getURL("lilac.html");
+  await chrome.tabs.create({ url });
+});
+
 $("#changeFolder").addEventListener("click", async () => {
   const cfg = await call("getConfig");
   const current = (cfg && cfg.result && cfg.result.records_root) || "";

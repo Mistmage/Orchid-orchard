@@ -12,6 +12,16 @@
   "background": {
     "service_worker": "background.js"
   },
+  "commands": {
+    "save-tab": {
+      "suggested_key": { "default": "Ctrl+Shift+L" },
+      "description": "Save current tab to Lilac"
+    },
+    "open-manager": {
+      "suggested_key": { "default": "Ctrl+Shift+M" },
+      "description": "Open Lilac manager"
+    }
+  },
   "browser_specific_settings": {
     "gecko": {
       "id": "lilac@orchid",

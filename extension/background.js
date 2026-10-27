@@ -189,3 +189,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   })();
   return true; // async
 });
+
+// Keyboard shortcuts
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command === "save-tab") {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const t = tabs && tabs[0];
+    if (!t) return;
+    const record = { type: "page", title: t.title || "", url: t.url || "", tags: [] };
+    await send("save_record", { record, body: "" });
+  } else if (command === "open-manager") {
+    const url = chrome.runtime.getURL("lilac.html");
+    await chrome.tabs.create({ url });
+  }
+});

@@ -1,0 +1,15 @@
+# Lilac records root .gitignore template
+# Copy to your records root's parent or the records root itself.
+
+# Machine-specific config (never commit)
+.lilac/
+.orchard/
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+*.swp
+*~
