@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 /// A Lilac record. Frontmatter only; body is handled by the storage layer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Record {
+    #[serde(default)]
     pub id: String,
     #[serde(rename = "type")]
     pub r#type: String,

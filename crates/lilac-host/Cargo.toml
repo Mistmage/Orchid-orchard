@@ -1,0 +1,20 @@
+[package]
+name = "lilac-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Lilac native messaging host (browser <-> record store)."
+
+[[bin]]
+name = "lilac-host"
+path = "src/main.rs"
+
+[dependencies]
+lilac-core = { path = "../lilac-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }

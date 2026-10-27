@@ -1,0 +1,34 @@
+# Lilac Extension (MV3)
+
+Thin client for the Lilac record store. Talks to the Rust native host `lilac-host` via native messaging.
+
+## Prerequisites
+
+1. Build the host:
+   ```
+   cargo build -p lilac-host
+   ```
+2. Register the host (Windows):
+   ```
+   powershell -File ..\scripts\install-host.ps1 -ExtensionId <your chrome extension id>
+   ```
+   (Linux/macOS: `../scripts/install-host.sh /path/to/lilac-host <ext_id>`)
+
+## Load unpacked
+
+- Chrome: `chrome://extensions` → Developer mode → Load unpacked → select this `extension/` folder. Copy the generated extension ID.
+- Firefox: `about:debugging` → This Firefox → Load Temporary Add-on → select `manifest.json`.
+
+## Dev notes
+
+- Chrome extension ID is derived from the unpacked path unless a `key` is added to manifest.json. For a stable ID across machines, generate a keypair (Chrome docs: "Private key for signing") and add `"key": "..."` to manifest.json, then re-run install with that ID.
+- Firefox uses the fixed id `lilac@orchid` (set in `browser_specific_settings.gecko.id`).
+- The extension is stateless: all data lives in the records root (default `~/Lilac`), config in `~/.lilac`.
+
+## Current capabilities (Phase 2)
+
+- Save current tab → `Records/page/<slug>--<id>.md`
+- Save selected tabs → collection record + per-tab page records
+- List recent records; reopen a record or collection
+
+Search/edit/tags UI arrive in Phase 4.

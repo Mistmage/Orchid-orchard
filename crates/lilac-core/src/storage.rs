@@ -144,7 +144,7 @@ pub struct Index {
     pub records: Vec<IndexEntry>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IndexEntry {
     pub id: String,
     pub r#type: String,

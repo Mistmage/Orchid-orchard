@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Lilac",
+  "version": "0.1.0",
+  "description": "Save tabs as Markdown/YAML records on disk. Cross-browser, Git-friendly.",
+  "permissions": ["tabs", "storage", "nativeMessaging"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Lilac"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "lilac@orchid",
+      "strict_min_version": "109.0"
+    }
+  }
+}
