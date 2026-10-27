@@ -23,6 +23,16 @@ $zip = Join-Path $OutDir "lilac-extension.zip"
 if (Test-Path $zip) { Remove-Item $zip }
 Compress-Archive -Path "$ext\*" -DestinationPath $zip
 
+Write-Host "Building Orchard (Tauri, release)..."
+$orchard = Join-Path $root "apps\orchard\src-tauri"
+if (Test-Path $orchard) {
+    Push-Location $orchard
+    cargo build --release
+    Pop-Location
+    $orchardBin = Join-Path $root "target\release\orchard.exe"
+    if (Test-Path $orchardBin) { Copy-Item $orchardBin (Join-Path $OutDir "orchard.exe") -Force }
+}
+
 Write-Host ""
 Write-Host "Artifacts in $OutDir :"
 Get-ChildItem $OutDir
