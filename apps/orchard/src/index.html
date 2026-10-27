@@ -38,12 +38,26 @@
           : await invoke("list_records");
         if (!items.length) { root.innerHTML = "<div class='card'>No records.</div>"; return; }
         root.innerHTML = items.map((r) => `
-          <div class="card">
+          <div class="card" data-id="${esc(r.id)}" style="cursor:pointer;">
             <div class="title">${esc(r.title || r.id)}</div>
             <div class="meta">${esc(r.id)} · ${esc(r.type)}${r.status ? " · " + esc(r.status) : ""}</div>
             <div class="tags">${(r.tags || []).map(esc).join(", ")}</div>
+            <div class="blocks" id="blocks-${esc(r.id)}" style="display:none; margin-top:8px; font-size:12px; white-space:pre-wrap;"></div>
           </div>
         `).join("");
+        root.querySelectorAll(".card").forEach((card) => {
+          card.addEventListener("click", async () => {
+            const id = card.dataset.id;
+            const el = document.getElementById("blocks-" + id);
+            if (!el) return;
+            if (el.style.display === "block") { el.style.display = "none"; return; }
+            try {
+              const blocks = JSON.parse(await invoke("get_blocks", { id }));
+              el.innerHTML = blocks.map((b) => `<div><b>${esc(b.kind && b.kind.Heading ? "H" + b.kind.Heading.level : (b.kind && typeof b.kind === "string" ? b.kind : JSON.stringify(b.kind)))}</b> ${esc((b.content || "").slice(0, 120))}</div>`).join("");
+              el.style.display = "block";
+            } catch (e) { el.textContent = "Error: " + e; el.style.display = "block"; }
+          });
+        });
       } catch (e) {
         root.innerHTML = "<div class='card'>Error: " + esc(String(e)) + "</div>";
       }

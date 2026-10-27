@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BlockKind {
     Frontmatter,
     Heading { level: u8 },
@@ -23,7 +23,7 @@ pub enum BlockKind {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Block {
     pub id: Option<String>,
     pub kind: BlockKind,
@@ -92,6 +92,30 @@ pub fn block_hash(block: &Block) -> String {
     format!("{:?}", block.kind).hash(&mut h);
     block.content.hash(&mut h);
     format!("{:x}", h.finish())
+}
+
+/// Apply a single block edit: find the block by id, splice new content
+/// into its byte span, preserving everything else byte-identical.
+/// Returns the updated text, or an error if the block isn't found or the
+/// span is invalid.
+pub fn apply_block_edit(text: &str, block_id: &str, new_content: &str) -> Result<String, String> {
+    let blocks = parse_blocks(text);
+    let block = find_block(&blocks, block_id).ok_or_else(|| format!("block not found: {}", block_id))?;
+    let (start, end) = block.span;
+    if start > end || end > text.len() {
+        return Err(format!("invalid span for block {}", block_id));
+    }
+    Ok(splice_block(text, &block, new_content))
+}
+
+/// Apply multiple block edits sequentially. Each edit re-parses the
+/// (possibly changed) text, so spans stay consistent.
+pub fn apply_block_edits(text: &str, edits: &[(String, String)]) -> Result<String, String> {
+    let mut current = text.to_string();
+    for (id, content) in edits {
+        current = apply_block_edit(&current, id, content)?;
+    }
+    Ok(current)
 }
 
 /// Reconcile a new parse against a previous block tree, preserving IDs
@@ -405,5 +429,37 @@ mod tests {
         }
         reconcile_blocks(&old, &mut new);
         assert_eq!(new[0].id.as_deref(), Some("title"));
+    }
+
+    #[test]
+    fn apply_block_edit_single() {
+        let text = "# Hi\n\npara\n";
+        let blocks = parse_blocks(text);
+        let b = find_block(&blocks, "hi").unwrap();
+        let out = apply_block_edit(text, "hi", "# Hello\n").unwrap();
+        assert_eq!(out, "# Hello\n\npara\n");
+    }
+
+    #[test]
+    fn apply_block_edit_missing() {
+        let text = "# Hi\n";
+        assert!(apply_block_edit(text, "nope", "x").is_err());
+    }
+
+    #[test]
+    fn apply_block_edits_sequential() {
+        let text = "# A\n\n# B\n";
+        let edits = vec![("a".to_string(), "# A1\n".to_string()), ("b".to_string(), "# B1\n".to_string())];
+        let out = apply_block_edits(text, &edits).unwrap();
+        assert!(out.contains("A1"));
+        assert!(out.contains("B1"));
+    }
+
+    #[test]
+    fn apply_block_edit_preserves_surrounding() {
+        let text = "before\n\n# Hi\n\nafter\n";
+        let out = apply_block_edit(text, "hi", "# Hello\n").unwrap();
+        assert!(out.starts_with("before\n\n"));
+        assert!(out.ends_with("after\n"));
     }
 }

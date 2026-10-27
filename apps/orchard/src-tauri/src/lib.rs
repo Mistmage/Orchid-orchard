@@ -1,4 +1,4 @@
-use lilac_core::{read_record, rebuild_index, search_records, Record};
+use lilac_core::{apply_block_edit, parse_blocks, read_record, rebuild_index, search_records, write_record, Record};
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -105,12 +105,36 @@ fn records_root_path() -> String {
     records_root().to_string_lossy().to_string()
 }
 
+#[tauri::command]
+fn get_blocks(id: String) -> Result<String, String> {
+    let root = records_root();
+    let path = find_record_file(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
+    let (_rec, body) = read_record(&path).map_err(|e| e.to_string())?;
+    let body = body.unwrap_or_default();
+    let blocks = parse_blocks(&body);
+    Ok(serde_json::to_string(&blocks).unwrap_or_default())
+}
+
+#[tauri::command]
+fn apply_block_edit_cmd(id: String, block_id: String, new_content: String) -> Result<String, String> {
+    let root = records_root();
+    let path = find_record_file(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
+    let (mut rec, body) = read_record(&path).map_err(|e| e.to_string())?;
+    let body = body.unwrap_or_default();
+    let new_body = apply_block_edit(&body, &block_id, &new_content).map_err(|e| e)?;
+    rec.modified = Some(chrono::Utc::now().to_rfc3339());
+    write_record(&path, &rec, Some(&new_body)).map_err(|e| e.to_string())?;
+    Ok(new_body)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             list_records,
             search,
             load_record,
+            get_blocks,
+            apply_block_edit_cmd,
             records_root_path
         ])
         .run(tauri::generate_context!())

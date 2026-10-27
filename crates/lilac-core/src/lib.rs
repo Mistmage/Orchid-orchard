@@ -10,8 +10,8 @@ pub mod storage;
 pub mod wal;
 
 pub use block::{
-    Block, BlockKind, block_hash, find_block, parse_blocks, reconcile_blocks, reconcile_text,
-    splice_block,
+    apply_block_edit, apply_block_edits, Block, BlockKind, block_hash, find_block, parse_blocks,
+    reconcile_blocks, reconcile_text, splice_block,
 };
 pub use collection::{CollectionItem, parse_collection_body, render_collection_body};
 pub use error::Error;
