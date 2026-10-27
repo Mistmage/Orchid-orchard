@@ -142,6 +142,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const patch = msg.patch || {};
         const res = await send("update_record", { id: msg.id, patch, body: msg.body });
         sendResponse({ ok: true, result: res });
+      } else if (msg.type === "rebuildIndex") {
+        const res = await send("rebuild_index", {});
+        sendResponse({ ok: true, result: res });
       } else if (msg.type === "getConfig") {
         const res = await send("get_config", {});
         sendResponse({ ok: true, result: res });

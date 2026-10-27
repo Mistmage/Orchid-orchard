@@ -14,3 +14,13 @@ main { max-height: 320px; overflow: auto; }
 .item .row { display: flex; gap: 6px; margin-top: 6px; }
 .item button { font-size: 11px; padding: 3px 6px; cursor: pointer; }
 footer { font-size: 11px; color: #666; margin-top: 8px; min-height: 14px; }
+@media (prefers-color-scheme: dark) {
+  body { background: #1e1e2e; color: #cdd6f4; }
+  .actions button, nav button { background: #313244; color: #cdd6f4; border-color: #45475a; }
+  nav button.active { background: #89b4fa; color: #1e1e2e; border-color: #89b4fa; }
+  .item { border-color: #45475a; background: #181825; }
+  .item .url { color: #a6adc8; }
+  .item .tags { color: #6c7086; }
+  footer { color: #a6adc8; }
+  input, textarea { background: #313244; color: #cdd6f4; border-color: #45475a; }
+}

@@ -224,6 +224,13 @@ $("#openManager").addEventListener("click", async () => {
   await chrome.tabs.create({ url });
 });
 
+$("#rebuildIndex").addEventListener("click", async () => {
+  setStatus("Rebuilding index...");
+  const resp = await call("rebuildIndex");
+  setStatus(resp && resp.ok ? "Indexed " + (resp.result && resp.result.count) + " records" : "Error: " + (resp && resp.error));
+  render();
+});
+
 $("#changeFolder").addEventListener("click", async () => {
   const cfg = await call("getConfig");
   const current = (cfg && cfg.result && cfg.result.records_root) || "";
