@@ -233,4 +233,15 @@ $("#changeFolder").addEventListener("click", async () => {
   }
 });
 
+$("#snapshotTab").addEventListener("click", async () => {
+  setStatus("Snapshotting...");
+  const resp = await call("snapshotCurrentTab");
+  if (resp && resp.ok) {
+    setStatus("Snapshotted: " + (resp.result && resp.result.asset && resp.result.asset.path));
+    render();
+  } else {
+    setStatus("Error: " + (resp && resp.error));
+  }
+});
+
 render();

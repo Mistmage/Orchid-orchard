@@ -19,4 +19,7 @@ pub enum Error {
 
     #[error("frontmatter missing or malformed")]
     NoFrontmatter,
+
+    #[error("file contains conflict markers: {0}")]
+    Conflict(String),
 }

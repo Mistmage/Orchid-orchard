@@ -1,10 +1,12 @@
 mod config;
 
+use base64::Engine;
 use config::{load_config, logs_dir, set_records_root};
 use lilac_core::{
     Record, delete_record, read_record, rebuild_index, record_path, search_records, write_record,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
@@ -197,6 +199,31 @@ fn dispatch(records_root: &std::path::Path, method: &str, params: Value) -> Resu
             std::fs::create_dir_all(&target).ok();
             open_in_file_manager(&target)?;
             Ok(json!({ "path": target.to_string_lossy() }))
+        }
+        "save_asset" => {
+            let data_b64 = params
+                .get("data")
+                .and_then(|v| v.as_str())
+                .ok_or("missing data")?;
+            let subdir = params
+                .get("subdir")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Assets");
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(data_b64)
+                .map_err(|e| e.to_string())?;
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            let hash = format!("{:x}", hasher.finalize());
+            let ext = params.get("ext").and_then(|v| v.as_str()).unwrap_or("bin");
+            let filename = format!("{}.{}", hash, ext);
+            let dir = records_root.join(subdir);
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let path = dir.join(&filename);
+            if !path.exists() {
+                std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+            }
+            Ok(json!({ "path": format!("{}/{}", subdir, filename), "hash": hash }))
         }
         _ => Err(format!("unknown method: {}", method)),
     }

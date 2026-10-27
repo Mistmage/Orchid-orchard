@@ -296,6 +296,16 @@ as they are notes - metdata, notes and so on can be added on top of them​‌
 
 ---
 
+## Fae / Fairy | Daphna / Abelia?
+
+Ai support, be it for adding metadata to notes, classifying sorting etc
+
+an API token (low-medium supprot)
+small local model (really small) (embded?) - 
+a jev like mechanism for classification and so on
+a smart system that can take a list of url/record or tabs and one by one save them mindful of the llm speed / token limits
+with ability to cycle though many API if ones is used up
+
 ---
 
 ```

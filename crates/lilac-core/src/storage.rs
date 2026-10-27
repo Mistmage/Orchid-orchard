@@ -41,6 +41,9 @@ pub fn split_frontmatter(contents: &str) -> Result<(&str, Option<&str>), Error> 
 
 pub fn read_record(path: &Path) -> Result<(Record, Option<String>), Error> {
     let contents = fs::read_to_string(path)?;
+    if contents.contains("<<<<<<<") && contents.contains(">>>>>>>") {
+        return Err(Error::Conflict(path.to_string_lossy().to_string()));
+    }
     let (yaml, body) = split_frontmatter(&contents)?;
     let record: Record = serde_yaml::from_str(yaml)?;
     let body = body

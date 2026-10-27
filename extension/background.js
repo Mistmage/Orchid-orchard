@@ -84,6 +84,36 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         };
         const res = await send("save_record", { record, body: "" });
         sendResponse({ ok: true, result: res });
+      } else if (msg.type === "snapshotCurrentTab") {
+        // Chrome-only: capture current tab as MHTML and store as an asset.
+        if (!chrome.pageCapture || !chrome.pageCapture.saveAsMHTML) {
+          sendResponse({ ok: false, error: "pageCapture not supported in this browser" });
+          return;
+        }
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        const t = tabs && tabs[0];
+        if (!t) { sendResponse({ ok: false, error: "no active tab" }); return; }
+        chrome.pageCapture.saveAsMHTML({ tabId: t.id }, async (blob) => {
+          if (chrome.runtime.lastError || !blob) {
+            sendResponse({ ok: false, error: (chrome.runtime.lastError && chrome.runtime.lastError.message) || "capture failed" });
+            return;
+          }
+          try {
+            const buf = await blob.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            let bin = "";
+            for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+            const b64 = btoa(bin);
+            const asset = await send("save_asset", { data: b64, ext: "mhtml", subdir: "Assets" });
+            // save a page record referencing the snapshot
+            const record = { type: "page", title: t.title || "", url: t.url || "", tags: [], snapshot: asset.path, snapshot_format: "mhtml" };
+            const rec = await send("save_record", { record, body: "" });
+            sendResponse({ ok: true, result: { record: rec, asset } });
+          } catch (e) {
+            sendResponse({ ok: false, error: String(e && e.message ? e.message : e) });
+          }
+        });
+        return true;
       } else if (msg.type === "saveSelectedTabs") {
         const tabs = await chrome.tabs.query({ highlighted: true, currentWindow: true });
         const list = tabs && tabs.length ? tabs : await chrome.tabs.query({ currentWindow: true });
