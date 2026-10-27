@@ -25,6 +25,7 @@ async function renderRecent() {
       <div class="tags">${(r.tags || []).map(escape).join(", ")}</div>
       <div class="row">
         <button data-open="${r.id}">Open</button>
+        <button data-del="${r.id}">Delete</button>
       </div>
     </div>
   `).join("");
@@ -32,6 +33,14 @@ async function renderRecent() {
     btn.addEventListener("click", async () => {
       await call("reopenRecord", { id: btn.dataset.open });
       setStatus("Opened");
+    });
+  });
+  list.querySelectorAll("[data-del]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Delete this record?")) return;
+      await call("deleteRecord", { id: btn.dataset.del });
+      setStatus("Deleted");
+      render();
     });
   });
 }
@@ -50,13 +59,22 @@ async function renderCollections() {
       <div class="url">${escape(r.id)}</div>
       <div class="row">
         <button data-reopen="${r.id}">Open all</button>
+        <button data-del="${r.id}">Delete</button>
       </div>
     </div>
   `).join("");
   list.querySelectorAll("[data-reopen]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const res = await call("reopenCollection", { id: btn.dataset.reopen });
-      setStatus("Opened " + (res && res.count ? res.count : 0) + " tabs");
+      setStatus("Opened " + (res && res.count ? res.count : 0) + " tabs" + (res && res.skipped ? " (skipped " + res.skipped + ")" : ""));
+    });
+  });
+  list.querySelectorAll("[data-del]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Delete this collection?")) return;
+      await call("deleteRecord", { id: btn.dataset.del });
+      setStatus("Deleted");
+      render();
     });
   });
 }

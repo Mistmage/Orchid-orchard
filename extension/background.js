@@ -117,6 +117,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const url = rec && rec.url;
         if (url) await chrome.tabs.create({ url, active: false });
         sendResponse({ ok: true });
+      } else if (msg.type === "deleteRecord") {
+        await send("delete_record", { id: msg.id });
+        sendResponse({ ok: true });
       } else if (msg.type === "reopenCollection") {
         const res = await send("load_record", { id: msg.id });
         const body = res && res.body;
