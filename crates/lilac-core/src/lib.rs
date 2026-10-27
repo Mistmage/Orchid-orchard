@@ -2,11 +2,13 @@
 
 pub mod collection;
 pub mod error;
+pub mod naming;
 pub mod record;
 pub mod storage;
 
 pub use collection::{CollectionItem, parse_collection_body, render_collection_body};
 pub use error::Error;
+pub use naming::{NamingConfig, NamingRule};
 pub use record::Record;
 pub use storage::{
     Index, IndexEntry, delete_record, read_record, rebuild_index, record_filename, record_path,
