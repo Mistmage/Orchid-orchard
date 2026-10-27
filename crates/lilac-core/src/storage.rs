@@ -150,6 +150,8 @@ pub struct IndexEntry {
     pub r#type: String,
     pub title: Option<String>,
     pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
     pub path: String,
     pub modified: Option<String>,
 }
@@ -172,6 +174,7 @@ pub fn rebuild_index(records_root: &Path) -> Result<Index, Error> {
                 r#type: rec.r#type,
                 title: rec.title,
                 tags: rec.tags,
+                status: rec.status,
                 path: rel,
                 modified: rec.modified,
             });
@@ -212,6 +215,11 @@ pub fn search_records(index: &Index, query: &str) -> Vec<IndexEntry> {
                     match k {
                         "tag" => e.tags.iter().any(|x| x.eq_ignore_ascii_case(v)),
                         "type" => e.r#type.eq_ignore_ascii_case(v),
+                        "status" => e
+                            .status
+                            .as_deref()
+                            .map(|s| s.eq_ignore_ascii_case(v))
+                            .unwrap_or(false),
                         _ => true,
                     }
                 } else {

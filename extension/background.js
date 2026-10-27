@@ -99,8 +99,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const col = { type: "collection", title: "Saved tabs " + new Date().toISOString(), tags: [] };
         const cres = await send("save_record", { record: col, body });
         sendResponse({ ok: true, result: { count: list.length, collection: cres } });
+      } else if (msg.type === "loadRecord") {
+        const res = await send("load_record", { id: msg.id });
+        sendResponse({ ok: true, result: res });
       } else if (msg.type === "listRecent") {
         const res = await send("search_records", { query: "" });
+        sendResponse({ ok: true, result: res });
+      } else if (msg.type === "search") {
+        const res = await send("search_records", { query: msg.query || "" });
+        sendResponse({ ok: true, result: res });
+      } else if (msg.type === "updateRecord") {
+        const patch = msg.patch || {};
+        const res = await send("update_record", { id: msg.id, patch, body: msg.body });
         sendResponse({ ok: true, result: res });
       } else if (msg.type === "getConfig") {
         const res = await send("get_config", {});
