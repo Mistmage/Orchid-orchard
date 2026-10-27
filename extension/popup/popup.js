@@ -1,4 +1,5 @@
 const $ = (s) => document.querySelector(s);
+const on = (sel, ev, fn) => { const el = $(sel); if (el) el.addEventListener(ev, fn); };
 const list = $("#list");
 const status = $("#status");
 const searchbar = $("#searchbar");
@@ -88,8 +89,8 @@ async function openEditor(id) {
     </div>
   `;
   list.innerHTML = html;
-  $("#e-cancel").addEventListener("click", render);
-  $("#e-save").addEventListener("click", async () => {
+  on("#e-cancel", "click", render);
+  on("#e-save", "click", async () => {
     const patch = {
       title: $("#e-title").value,
       tags: $("#e-tags").value.split(",").map((s) => s.trim()).filter(Boolean),
@@ -193,21 +194,21 @@ document.querySelectorAll("nav button").forEach((b) => {
 qInput.addEventListener("input", () => { if (currentView === "search") runSearch(); });
 qInput.addEventListener("keydown", (e) => { if (e.key === "Enter") runSearch(); });
 
-$("#saveTab").addEventListener("click", async () => {
+on("#saveTab", "click", async () => {
   setStatus("Saving...");
   const resp = await call("saveCurrentTab");
   setStatus(resp && resp.ok ? "Saved" : "Error: " + (resp && resp.error));
   render();
 });
 
-$("#saveSelected").addEventListener("click", async () => {
+on("#saveSelected", "click", async () => {
   setStatus("Saving selected...");
   const resp = await call("saveSelectedTabs");
   setStatus(resp && resp.ok ? "Saved " + (resp.result && resp.result.count) + " tabs" : "Error: " + (resp && resp.error));
   render();
 });
 
-$("#openFolder").addEventListener("click", async () => {
+on("#openFolder", "click", async () => {
   setStatus("Opening folder...");
   const resp = await call("openFolder", { which: "records" });
   if (resp && resp.ok) {
@@ -219,19 +220,19 @@ $("#openFolder").addEventListener("click", async () => {
   }
 });
 
-$("#openManager").addEventListener("click", async () => {
+on("#openManager", "click", async () => {
   const url = chrome.runtime.getURL("lilac.html");
   await chrome.tabs.create({ url });
 });
 
-$("#rebuildIndex").addEventListener("click", async () => {
+on("#rebuildIndex", "click", async () => {
   setStatus("Rebuilding index...");
   const resp = await call("rebuildIndex");
   setStatus(resp && resp.ok ? "Indexed " + (resp.result && resp.result.count) + " records" : "Error: " + (resp && resp.error));
   render();
 });
 
-$("#checkConflicts").addEventListener("click", async () => {
+on("#checkConflicts", "click", async () => {
   setStatus("Checking conflicts...");
   const resp = await call("listConflicts");
   const c = (resp && resp.result && resp.result.conflicts) || [];
@@ -239,7 +240,7 @@ $("#checkConflicts").addEventListener("click", async () => {
   else setStatus("Conflicts: " + c.map((x) => x.path).join(", "));
 });
 
-$("#changeFolder").addEventListener("click", async () => {
+on("#changeFolder", "click", async () => {
   const cfg = await call("getConfig");
   const current = (cfg && cfg.result && cfg.result.records_root) || "";
   const next = prompt("Records folder path:", current);
@@ -253,7 +254,7 @@ $("#changeFolder").addEventListener("click", async () => {
   }
 });
 
-$("#snapshotTab").addEventListener("click", async () => {
+on("#snapshotTab", "click", async () => {
   setStatus("Snapshotting...");
   const resp = await call("snapshotCurrentTab");
   if (resp && resp.ok) {
