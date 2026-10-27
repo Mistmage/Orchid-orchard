@@ -43,11 +43,13 @@ When Orchid arrives, a Lilac record is just a record with `type: page`/`collecti
 
 - Orchid is the **note-taking feature** on orchard-core, not a separate product.
 - Built on **Tauri + SolidJS** (not Electron). Tauri renders; Rust is sole authority.
-- **No JS editor library owns document structure** (no ProseMirror/CodeMirror/Tiptap). Blocks are plain-text-ish with a half-hidden internal hierarchy; Rust owns the buffer, block tree, IDs, and mutations. Frontend is a thin renderer fed Rust-originating transactions. This is the Helix-for-brains idea: modal editing + block model in Rust, webview only paints.
+- **No JS editor library owns document structure** (no ProseMirror/CodeMirror/Tiptap). Blocks are plain-text-ish with a half-hidden internal hierarchy; Rust owns the buffer, block tree, IDs, and mutations. Frontend is a thin renderer.
+  - CodeMirror (minimal: view + basic keymap only) is acceptable as the *input surface* for the active block: input normalization, selection, caret, mouse/keyboard navigation. No markdown parsing, no history, no structure in JS.
 - Core must grow block awareness (block identity, surgical edits, byte spans, WAL, external-edit reconciliation); Lilac benefits from this too.
 - Block identity is type-aware: headings get IDs eagerly; `---` separators and other blocks only when referenced (lazy); YAML frontmatter IDs eager. Content hash as fallback.
+- **Rendering contract is a scene graph, not a command/event protocol.** Rust emits the view tree (the block tree is the scene graph for v0); renderers (Tauri webview, future native) paint it. This avoids a second source of truth and makes renderer swaps trivial. (Think Blitz-style display list.)
 - Timing: editor/parser can start against a mock store now; storage integration waits for Lilac's block-level evolution.
-- Later, Wisteria does the same pattern (Rust authority, thin renderer). Routing between Orchid and Wisteria views is static ("webtau"). Wisteria later embeds a Chromium backend.
+- Later, Wisteria does the same pattern (Rust authority, scene-graph renderer). Wisteria later embeds a Chromium backend (Tauri -> Chromium is the progression). "webtau" for static routing between Orchid and Wisteria views — if this is a specific tool, point me at it.
 
 ## Implementation status
 

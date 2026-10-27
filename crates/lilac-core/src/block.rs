@@ -220,6 +220,67 @@ fn build_tree(flat: Vec<FlatBlock>) -> Vec<Block> {
     root_children
 }
 
+/// Content hash for a block (used for dedup and change detection).
+pub fn block_hash(block: &Block) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    format!("{:?}", block.kind).hash(&mut h);
+    block.content.hash(&mut h);
+    format!("{:x}", h.finish())
+}
+
+/// Reconcile a new parse against a previous block tree, preserving IDs
+/// where content matches (by id first, then by content hash).
+pub fn reconcile_blocks(old: &[Block], new: &mut [Block]) {
+    // Build lookup: id -> hash, and hash -> id (from old).
+    let mut id_by_hash: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut hash_by_id: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    collect_old(old, &mut id_by_hash, &mut hash_by_id);
+    // Walk new, assign ids.
+    for b in new.iter_mut() {
+        reconcile_one(b, &id_by_hash, &hash_by_id);
+    }
+}
+
+fn collect_old(
+    blocks: &[Block],
+    id_by_hash: &mut std::collections::HashMap<String, String>,
+    hash_by_id: &mut std::collections::HashMap<String, String>,
+) {
+    for b in blocks {
+        let h = block_hash(b);
+        if let Some(id) = &b.id {
+            id_by_hash.entry(h.clone()).or_insert_with(|| id.clone());
+            hash_by_id.insert(id.clone(), h.clone());
+        }
+        collect_old(&b.children, id_by_hash, hash_by_id);
+    }
+}
+
+fn reconcile_one(
+    block: &mut Block,
+    id_by_hash: &std::collections::HashMap<String, String>,
+    hash_by_id: &std::collections::HashMap<String, String>,
+) {
+    let h = block_hash(block);
+    if block.id.is_none() {
+        // Try to recover id from old by content hash.
+        if let Some(id) = id_by_hash.get(&h) {
+            block.id = Some(id.clone());
+        }
+    } else if let Some(id) = &block.id {
+        // If id existed in old but content changed, keep id (stable identity).
+        // If id is new (not in old), keep as-is.
+        let _ = hash_by_id.get(id);
+    }
+    for c in block.children.iter_mut() {
+        reconcile_one(c, id_by_hash, hash_by_id);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,5 +331,45 @@ mod tests {
     fn horizontal_rule() {
         let blocks = parse_blocks("---\n");
         assert!(matches!(blocks[0].kind, BlockKind::HorizontalRule));
+    }
+
+    #[test]
+    fn block_hash_stable() {
+        let b = Block {
+            id: Some("h".into()),
+            kind: BlockKind::Paragraph,
+            content: "hello".into(),
+            span: (0, 5),
+            children: vec![],
+        };
+        assert_eq!(block_hash(&b), block_hash(&b));
+    }
+
+    #[test]
+    fn reconcile_preserves_id_on_matching_content() {
+        let old = parse_blocks("# Title\n\npara\n");
+        // new parse of same content
+        let mut new = parse_blocks("# Title\n\npara\n");
+        // wipe ids to simulate lost identity
+        for b in new.iter_mut() {
+            b.id = None;
+            for c in b.children.iter_mut() {
+                c.id = None;
+            }
+        }
+        reconcile_blocks(&old, &mut new);
+        // heading id restored
+        assert_eq!(new[0].id.as_deref(), Some("title"));
+    }
+
+    #[test]
+    fn reconcile_keeps_new_id_for_changed_content() {
+        let old = parse_blocks("# Title\n");
+        let mut new = parse_blocks("# Different\n");
+        // new heading already has its own id
+        assert_eq!(new[0].id.as_deref(), Some("different"));
+        reconcile_blocks(&old, &mut new);
+        // id stays (content changed, but id not in old by hash? heading id was "title" in old, hash differs, so no recovery; keeps "different")
+        assert_eq!(new[0].id.as_deref(), Some("different"));
     }
 }
