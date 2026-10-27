@@ -82,6 +82,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           url: t.url || "",
           tags: [],
         };
+        // capture tab group metadata (hint; cross-browser rule: not authoritative)
+        if (t.groupId && t.groupId !== -1 && chrome.tabGroups && chrome.tabGroups.get) {
+          try {
+            const g = await chrome.tabGroups.get(t.groupId);
+            if (g) record.tab_group = { title: g.title || "", color: g.color || "" };
+          } catch (e) {}
+        }
         const res = await send("save_record", { record, body: "" });
         sendResponse({ ok: true, result: res });
       } else if (msg.type === "snapshotCurrentTab") {
@@ -117,16 +124,29 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       } else if (msg.type === "saveSelectedTabs") {
         const tabs = await chrome.tabs.query({ highlighted: true, currentWindow: true });
         const list = tabs && tabs.length ? tabs : await chrome.tabs.query({ currentWindow: true });
+        // capture shared tab group (if all selected tabs share one group)
+        let sharedGroup = null;
+        const groupIds = new Set(list.map((t) => t.groupId).filter((g) => g && g !== -1));
+        if (groupIds.size === 1 && chrome.tabGroups && chrome.tabGroups.get) {
+          try { sharedGroup = await chrome.tabGroups.get([...groupIds][0]); } catch (e) {}
+        }
         // save each as page
         const ids = [];
         for (const t of list) {
           const record = { type: "page", title: t.title || "", url: t.url || "", tags: [] };
+          if (t.groupId && t.groupId !== -1 && chrome.tabGroups && chrome.tabGroups.get) {
+            try {
+              const g = await chrome.tabGroups.get(t.groupId);
+              if (g) record.tab_group = { title: g.title || "", color: g.color || "" };
+            } catch (e) {}
+          }
           const r = await send("save_record", { record, body: "" });
           ids.push(r.id);
         }
         // create collection
         const body = ids.map((id) => "- [[" + id + "]]").join("\n");
         const col = { type: "collection", title: "Saved tabs " + new Date().toISOString(), tags: [] };
+        if (sharedGroup) col.tab_group = { title: sharedGroup.title || "", color: sharedGroup.color || "" };
         const cres = await send("save_record", { record: col, body });
         sendResponse({ ok: true, result: { count: list.length, collection: cres } });
       } else if (msg.type === "loadRecord") {
@@ -187,7 +207,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             }
           }
         }
-        for (const u of urls) await chrome.tabs.create({ url: u, active: false });
+        const createdTabs = [];
+        for (const u of urls) {
+          const t = await chrome.tabs.create({ url: u, active: false });
+          createdTabs.push(t);
+        }
+        const tg = res && res.record && res.record.tab_group;
+        if (tg && createdTabs.length && chrome.tabs.group && chrome.tabGroups && chrome.tabGroups.update) {
+          try {
+            const groupId = await chrome.tabs.group({ tabIds: createdTabs.map((t) => t.id) });
+            await chrome.tabGroups.update(groupId, { title: tg.title || "", color: tg.color || "grey" });
+          } catch (e) {}
+        }
         sendResponse({ ok: true, count: urls.length });
       } else {
         sendResponse({ ok: false, error: "unknown type" });

@@ -182,8 +182,59 @@ async function renderSearch() {
   await runSearch();
 }
 
+async function renderSettings() {
+  list.innerHTML = "Loading...";
+  const cfg = await call("getConfig");
+  const rr = (cfg && cfg.result && cfg.result.records_root) || "";
+  const preview = await getSetting("previewSingle", false);
+  list.innerHTML = `
+    <div class="item">
+      <div class="title">Settings</div>
+      <div class="url">Records root: ${escape(rr)}</div>
+      <div class="row">
+        <button id="s-open">Open folder</button>
+        <button id="s-change">Change folder</button>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <label><input type="checkbox" id="s-preview" ${preview ? "checked" : ""} /> Preview single record before saving</label>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <button id="s-rebuild">Rebuild index</button>
+        <button id="s-conflicts">Check conflicts</button>
+      </div>
+      <div class="url" style="margin-top:8px;">Extension ID: <span id="s-extid">loading...</span></div>
+    </div>
+  `;
+  const openBtn = $("#s-open"); if (openBtn) openBtn.addEventListener("click", async () => { await call("openFolder", { which: "records" }); setStatus("Opened"); });
+  const changeBtn = $("#s-change"); if (changeBtn) changeBtn.addEventListener("click", async () => {
+    const next = prompt("Records folder path:", rr);
+    if (!next) return;
+    const r = await call("setRecordsRoot", { path: next });
+    if (r && r.ok) { setStatus("Records: " + r.result.records_root); renderSettings(); }
+    else setStatus("Error: " + (r && r.error));
+  });
+  const rebuildBtn = $("#s-rebuild"); if (rebuildBtn) rebuildBtn.addEventListener("click", async () => {
+    const r = await call("rebuildIndex"); setStatus(r && r.ok ? "Indexed " + r.result.count : "Error");
+  });
+  const confBtn = $("#s-conflicts"); if (confBtn) confBtn.addEventListener("click", async () => {
+    const r = await call("listConflicts"); const c = (r && r.result && r.result.conflicts) || [];
+    setStatus(c.length ? "Conflicts: " + c.map((x) => x.path).join(", ") : "No conflicts");
+  });
+  const previewCb = $("#s-preview"); if (previewCb) previewCb.addEventListener("change", () => setSetting("previewSingle", previewCb.checked));
+  // show extension id
+  try {
+    const id = chrome.runtime.id;
+    const el = $("#s-extid"); if (el) el.textContent = id;
+  } catch (e) {}
+}
+
 async function render() {
   searchbar.style.display = (currentView === "search") ? "block" : "none";
+  if (currentView === "recent") await renderRecent();
+  else if (currentView === "collections") await renderCollections();
+  else if (currentView === "tags") await renderTags();
+  else if (currentView === "search") await renderSearch();
+  else if (currentView === "settings") await renderSettings();
   if (currentView === "recent") await renderRecent();
   else if (currentView === "collections") await renderCollections();
   else if (currentView === "tags") await renderTags();
@@ -202,7 +253,25 @@ document.querySelectorAll("nav button").forEach((b) => {
 qInput.addEventListener("input", () => { if (currentView === "search") runSearch(); });
 qInput.addEventListener("keydown", (e) => { if (e.key === "Enter") runSearch(); });
 
+async function getSetting(key, def) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([key], (r) => resolve(r && r[key] != null ? r[key] : def));
+  });
+}
+
 on("#saveTab", "click", async () => {
+  const preview = await getSetting("previewSingle", false);
+  if (preview) {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const t = tabs && tabs[0];
+    if (!t) { setStatus("No active tab"); return; }
+    let groupInfo = "";
+    if (t.groupId && t.groupId !== -1 && chrome.tabGroups && chrome.tabGroups.get) {
+      try { const g = await chrome.tabGroups.get(t.groupId); groupInfo = "Group: " + (g.title || "(untitled)") + " (" + g.color + ")"; } catch (e) {}
+    }
+    const msg = "Save this tab?\n\nTitle: " + (t.title || "") + "\nURL: " + (t.url || "") + (groupInfo ? "\n" + groupInfo : "");
+    if (!confirm(msg)) { setStatus("Cancelled"); return; }
+  }
   setStatus("Saving...");
   const resp = await call("saveCurrentTab");
   setStatus(resp && resp.ok ? "Saved" : "Error: " + (resp && resp.error));
