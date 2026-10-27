@@ -1,4 +1,6 @@
-use lilac_core::{read_record, write_record, rebuild_index, search_records, delete_record, record_path, Record};
+use lilac_core::{
+    Record, delete_record, read_record, rebuild_index, record_path, search_records, write_record,
+};
 use tempfile::TempDir;
 
 fn make_root() -> TempDir {
@@ -20,7 +22,10 @@ fn base_record(id: &str, rtype: &str) -> Record {
 fn roundtrip_reserved_and_extra() {
     let root = make_root();
     let mut r = base_record("rec_89a13f2", "page");
-    r.extra.insert("foo".to_string(), serde_yaml::Value::String("bar".to_string()));
+    r.extra.insert(
+        "foo".to_string(),
+        serde_yaml::Value::String("bar".to_string()),
+    );
     let path = record_path(root.path(), &r);
     write_record(&path, &r, Some("Research candidate.")).unwrap();
 
@@ -50,13 +55,19 @@ fn wikilink_values_survive() {
     let mut r = Record::new("rec_w", "page");
     r.status = Some("[[Reading]]".to_string());
     r.tags = vec!["[[Rust]]".to_string()];
-    r.extra.insert("project".to_string(), serde_yaml::Value::String("[[Orchid]]".to_string()));
+    r.extra.insert(
+        "project".to_string(),
+        serde_yaml::Value::String("[[Orchid]]".to_string()),
+    );
     let path = record_path(root.path(), &r);
     write_record(&path, &r, None).unwrap();
     let (r2, _) = read_record(&path).unwrap();
     assert_eq!(r2.status.as_deref(), Some("[[Reading]]"));
     assert_eq!(r2.tags, vec!["[[Rust]]".to_string()]);
-    assert_eq!(r2.extra.get("project"), Some(&serde_yaml::Value::String("[[Orchid]]".to_string())));
+    assert_eq!(
+        r2.extra.get("project"),
+        Some(&serde_yaml::Value::String("[[Orchid]]".to_string()))
+    );
 }
 
 #[test]

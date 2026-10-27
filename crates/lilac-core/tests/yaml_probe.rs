@@ -2,6 +2,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Rec {
     id: String,
     r#type: String,
@@ -58,7 +59,8 @@ fn probe_tags_mixed() {
 
 #[test]
 fn probe_nested_extra() {
-    let yaml = "id: rec_1\ntype: page\nmy_company:\n  project: Orchid\n  priority: high\nrating: 5\n";
+    let yaml =
+        "id: rec_1\ntype: page\nmy_company:\n  project: Orchid\n  priority: high\nrating: 5\n";
     println!("YAML input:\n{}", yaml);
     match serde_yaml::from_str::<Rec>(yaml) {
         Ok(r) => println!("OK (extra): {:?}", r),

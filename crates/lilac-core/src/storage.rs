@@ -43,7 +43,9 @@ pub fn read_record(path: &Path) -> Result<(Record, Option<String>), Error> {
     let contents = fs::read_to_string(path)?;
     let (yaml, body) = split_frontmatter(&contents)?;
     let record: Record = serde_yaml::from_str(yaml)?;
-    let body = body.map(|b| b.trim_end_matches('\n').to_string()).filter(|b| !b.is_empty());
+    let body = body
+        .map(|b| b.trim_end_matches('\n').to_string())
+        .filter(|b| !b.is_empty());
     Ok((record, body))
 }
 
@@ -71,7 +73,9 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<(), Error> {
     fs::create_dir_all(parent)?;
     let tmp = parent.join(format!(
         ".{}.tmp",
-        path.file_name().and_then(|s| s.to_str()).unwrap_or("record")
+        path.file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("record")
     ));
     {
         let mut f = fs::File::create(&tmp)?;
@@ -115,11 +119,7 @@ fn host_of(url: &str) -> Option<&str> {
     let after = url.split("://").nth(1).unwrap_or(url);
     let host = after.split('/').next().unwrap_or(after);
     let host = host.split(':').next().unwrap_or(host);
-    if host.is_empty() {
-        None
-    } else {
-        Some(host)
-    }
+    if host.is_empty() { None } else { Some(host) }
 }
 
 pub fn record_filename(record: &Record) -> String {
@@ -216,7 +216,11 @@ pub fn search_records(index: &Index, query: &str) -> Vec<IndexEntry> {
                     }
                 } else {
                     let needle = t.to_lowercase();
-                    e.title.as_deref().unwrap_or("").to_lowercase().contains(&needle)
+                    e.title
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&needle)
                         || e.tags.iter().any(|x| x.to_lowercase().contains(&needle))
                         || e.id.to_lowercase().contains(&needle)
                 }
