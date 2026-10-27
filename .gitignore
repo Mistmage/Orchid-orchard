@@ -26,3 +26,6 @@ build/
 # Temp / scratch
 *.tmp
 *.log
+
+# Dev records (default records root when running install script from project)
+Lilac/
