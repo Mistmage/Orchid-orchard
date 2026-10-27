@@ -231,6 +231,14 @@ $("#rebuildIndex").addEventListener("click", async () => {
   render();
 });
 
+$("#checkConflicts").addEventListener("click", async () => {
+  setStatus("Checking conflicts...");
+  const resp = await call("listConflicts");
+  const c = (resp && resp.result && resp.result.conflicts) || [];
+  if (!c.length) setStatus("No conflicts found.");
+  else setStatus("Conflicts: " + c.map((x) => x.path).join(", "));
+});
+
 $("#changeFolder").addEventListener("click", async () => {
   const cfg = await call("getConfig");
   const current = (cfg && cfg.result && cfg.result.records_root) || "";

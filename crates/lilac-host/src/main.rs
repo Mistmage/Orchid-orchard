@@ -225,6 +225,12 @@ fn dispatch(records_root: &std::path::Path, method: &str, params: Value) -> Resu
             }
             Ok(json!({ "path": format!("{}/{}", subdir, filename), "hash": hash }))
         }
+        "list_conflicts" => {
+            let mut out = Vec::new();
+            let subdir = records_root.join("Records");
+            collect_conflicts(&subdir, records_root, &mut out);
+            Ok(json!({ "conflicts": out }))
+        }
         _ => Err(format!("unknown method: {}", method)),
     }
 }
@@ -270,6 +276,33 @@ fn open_in_file_manager(path: &std::path::Path) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[allow(clippy::collapsible_if)]
+fn collect_conflicts(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<Value>) {
+    if !dir.is_dir() {
+        return;
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_conflicts(&path, root, out);
+            } else if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                if let Ok(contents) = std::fs::read_to_string(&path) {
+                    if contents.contains("<<<<<<<") && contents.contains(">>>>>>>") {
+                        let id = read_record(&path).map(|r| r.0.id).unwrap_or_default();
+                        let rel = path
+                            .strip_prefix(root)
+                            .ok()
+                            .and_then(|p| p.to_str().map(|s| s.to_string()))
+                            .unwrap_or_else(|| path.to_string_lossy().to_string());
+                        out.push(json!({ "id": id, "path": rel }));
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn find_record_path(records_root: &std::path::Path, id: &str) -> Option<PathBuf> {
