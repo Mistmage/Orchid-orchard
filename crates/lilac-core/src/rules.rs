@@ -88,11 +88,7 @@ fn apply_action(record: &mut Record, a: &Action) {
             record.tags.retain(|x| x != t);
         }
         Action::Move(folder) => {
-            // move is recorded as metadata; actual FS move is host concern.
-            record.extra.insert(
-                "folder".to_string(),
-                serde_yaml::Value::String(folder.clone()),
-            );
+            record.folder = Some(folder.clone());
         }
         Action::Delete => {
             record
@@ -647,10 +643,7 @@ then move "Animals/Cats"
         let rs = parse_rules(text).unwrap();
         let mut r = rec();
         apply_rules(&mut r, &rs.rules);
-        assert_eq!(
-            r.extra.get("folder"),
-            Some(&serde_yaml::Value::String("Animals/Cats".to_string()))
-        );
+        assert_eq!(r.folder.as_deref(), Some("Animals/Cats"));
     }
 
     #[test]

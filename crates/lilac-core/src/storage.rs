@@ -135,7 +135,25 @@ pub fn records_dir(records_root: &Path, rtype: &str) -> PathBuf {
 }
 
 pub fn record_path(records_root: &Path, record: &Record) -> PathBuf {
-    records_dir(records_root, &record.r#type).join(record_filename(record))
+    let base = records_root.join("Records");
+    let dir = match &record.folder {
+        Some(f) if !f.trim().is_empty() => {
+            // sanitize: no traversal
+            let clean: String = f
+                .replace('\\', "/")
+                .split('/')
+                .filter(|seg| !seg.is_empty() && *seg != ".." && *seg != ".")
+                .collect::<Vec<_>>()
+                .join("/");
+            if clean.is_empty() {
+                base.join(&record.r#type)
+            } else {
+                base.join(clean)
+            }
+        }
+        _ => base.join(&record.r#type),
+    };
+    dir.join(record_filename(record))
 }
 
 // ---------------------------------------------------------------------------

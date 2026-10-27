@@ -51,6 +51,10 @@ pub struct Record {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 
+    // folder placement (relative to Records/); rules may move records
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+
     // wisteria-compat (reserved, no-op v0.1)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authority: Option<String>,
@@ -91,6 +95,7 @@ impl Record {
             categories: vec![],
             status: None,
             url: None,
+            folder: None,
             authority: None,
             lineage: None,
             forked_from: None,
