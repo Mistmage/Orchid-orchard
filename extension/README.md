@@ -13,8 +13,15 @@ Thin client for the Lilac record store. Talks to the Rust native host `lilac-hos
    - Firefox: open `about:debugging` → "This Firefox" → "Load Temporary Add-on" → select `extension/manifest.json`.
 3. Register the native host with that ID:
    - Windows: `powershell -File ..\scripts\install-host.ps1 -ExtensionId <id from step 2>`
-   - Linux/macOS: `../scripts/install-host.sh /path/to/lilac-host <ext_id>`
+     - Records root defaults to `<current dir>\Lilac` (run from the project folder for dev). Override with `-RecordsRoot "D:\Notes\Lilac"`.
+   - Linux/macOS: `../scripts/install-host.sh /path/to/lilac-host <ext_id> [records_root]`
 4. Restart the browser.
+
+## Records folder
+
+- Default (no config): `~/Documents/Lilac`.
+- Change anytime via the extension's "Change folder" button, or `set_records_root` API.
+- "Open folder" button reveals the current location in the file manager.
 5. Click the Lilac toolbar icon → "Save tab". Use "Open folder" to reveal where records were written (default `~/Lilac`).
 
 ## Dev notes

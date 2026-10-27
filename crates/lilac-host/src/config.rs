@@ -44,7 +44,7 @@ pub fn home_dir() -> PathBuf {
 }
 
 pub fn default_records_root() -> PathBuf {
-    home_dir().join("Lilac")
+    home_dir().join("Documents").join("Lilac")
 }
 
 pub fn load_config() -> (Config, PathBuf) {

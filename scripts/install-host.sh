@@ -5,8 +5,9 @@ set -euo pipefail
 
 BINARY="${1:-}"
 EXT_ID="${2:-}"
+RECORDS_ROOT="${3:-$(pwd)/Lilac}"
 if [ -z "$BINARY" ]; then
-  echo "Usage: $0 /path/to/lilac-host [chrome_extension_id]" >&2
+  echo "Usage: $0 /path/to/lilac-host [chrome_extension_id] [records_root]" >&2
   exit 1
 fi
 BINARY="$(cd "$(dirname "$BINARY")" && pwd)/$(basename "$BINARY")"
@@ -47,5 +48,19 @@ FF_DIR="$HOME/.mozilla/native-messaging-hosts"
 mkdir -p "$FF_DIR"
 cp "$MANIFEST" "$FF_DIR/lilac_host.json"
 echo "Registered Firefox."
+
+# Write records_root into config.yaml (merge, don't clobber).
+CONFIG_DIR="$HOME/.lilac"
+mkdir -p "$CONFIG_DIR"
+CONFIG="$CONFIG_DIR/config.yaml"
+if [ -f "$CONFIG" ]; then
+  grep -v '^[[:space:]]*records_root[[:space:]]*:' "$CONFIG" > "$CONFIG.tmp" || true
+  mv "$CONFIG.tmp" "$CONFIG"
+fi
+if [ ! -s "$CONFIG" ]; then
+  echo "version: 1" > "$CONFIG"
+fi
+echo "records_root: \"$RECORDS_ROOT\"" >> "$CONFIG"
+echo "Set records_root = $RECORDS_ROOT in $CONFIG"
 
 echo "Done. Restart your browser and load the extension from ../extension"
