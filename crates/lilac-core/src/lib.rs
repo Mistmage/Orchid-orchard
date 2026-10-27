@@ -1,11 +1,13 @@
 //! Lilac record storage core.
 
+pub mod block;
 pub mod collection;
 pub mod error;
 pub mod naming;
 pub mod record;
 pub mod storage;
 
+pub use block::{Block, BlockKind, parse_blocks};
 pub use collection::{CollectionItem, parse_collection_body, render_collection_body};
 pub use error::Error;
 pub use naming::{NamingConfig, NamingRule};
