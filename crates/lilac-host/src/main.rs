@@ -3,8 +3,9 @@ mod config;
 use base64::Engine;
 use config::{load_config, logs_dir, set_records_root};
 use lilac_core::{
-    NamingConfig, NamingRule, Record, apply_rules as apply_rules_core, delete_record, parse_rules,
-    read_record, rebuild_index, record_path, search_records, write_record,
+    NamingConfig, NamingRule, Record, Wal, apply_block_edit, apply_rules as apply_rules_core,
+    delete_record, parse_rules, read_record, rebuild_index, record_path, search_records,
+    write_record,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -140,11 +141,30 @@ fn dispatch(records_root: &std::path::Path, method: &str, params: Value) -> Resu
             if let Some(patch) = params.get("patch") {
                 apply_patch(&mut rec, patch);
             }
-            let new_body = params
+            let mut new_body = params
                 .get("body")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .or(body);
+            // surgical block edit: splice a single block, preserving the rest
+            if let Some(be) = params.get("block_edit") {
+                let bid = be
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or("block_edit missing id")?;
+                let content = be
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .ok_or("block_edit missing content")?;
+                let cur = new_body.clone().unwrap_or_default();
+                let spliced = apply_block_edit(&cur, bid, content).map_err(|e| e.to_string())?;
+                new_body = Some(spliced);
+                let mut wal = Wal::new(config::config_root().join("wal.log"));
+                let _ = wal.append(
+                    "block_edit",
+                    serde_json::json!({ "record": id, "block": bid }),
+                );
+            }
             write_record(&path, &rec, new_body.as_deref()).map_err(|e| e.to_string())?;
             Ok(json!({ "id": rec.id, "path": path.to_string_lossy() }))
         }
