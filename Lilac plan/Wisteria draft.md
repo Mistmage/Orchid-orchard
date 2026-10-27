@@ -43,6 +43,13 @@ Wisteria additions (future, additive to Lilac's schema):
 
 Lilac is the **storage layer** Wisteria will read and write. Wisteria adds the **browser kernel** (renderer pooling, isotope policy, views) on top. Nothing in Lilac v0.1 should need to change for that future except additive fields and new record types. Lilac must keep its scope small ("and stop there") so it stays a clean substrate.
 
+## Refined role (from discussion)
+
+- Wisteria is the **browser feature** on orchard-core, deferred.
+- Later: embed a Chromium backend feeding into Orchard's Tauri (not a standalone engine fork initially).
+- Lilac is built now to defer Wisteria with peace of mind; later Lilac remains useful as an additional tool for separate browsers.
+- Lilac's record model is the seed Wisteria will read/write.
+
 ## Status
 
 Far-future design. Depends on Lilac v0.1 (substrate) + a custom browser engine decision. Not actionable now; tracked here for alignment only.

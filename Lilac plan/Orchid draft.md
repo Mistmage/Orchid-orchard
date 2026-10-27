@@ -39,6 +39,13 @@ Lilac proves the **record primitive** in the smallest setting: portable files, o
 
 When Orchid arrives, a Lilac record is just a record with `type: page`/`collection`. No migration needed.
 
+## Refined role (from discussion)
+
+- Orchid is the **note-taking feature** on orchard-core, not a separate product.
+- Built on Tauri (not Electron). Starts as the GUI for the Lilac host (more valuable than Orchid-as-product initially), then grows note features around it.
+- Core must grow block awareness; Lilac benefits from this too.
+- Timing: editor/parser can start against a mock store now; storage integration waits for Lilac's block-level evolution.
+
 ## Status
 
 Design discussion only. No implementation. Depends on Lilac v0.1 (substrate) plus the four hard storage problems being solved.

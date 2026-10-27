@@ -55,6 +55,17 @@ Lilac v0.1 deliberately avoids these: records are whole-file units (frontmatter 
 
 Lilac is **Orchard's first brick**. It proves the record primitive in the smallest possible setting (browser tabs → files), with plain-text-canonical storage, open metadata, and first-class links. Everything Lilac gets right (records, references, open metadata, file-as-DB, sync via ordinary files) becomes substrate for Orchid and Wisteria. Lilac must not inherit Wisteria's scope ("and stop there").
 
+## Refined architecture (from discussion)
+
+- **orchard-core** is the shared Rust core (records, storage, index, block model, naming, …). Used by Lilac, Orchid, and Wisteria.
+- **Orchard** is the app shell / UI that hosts features and controls Lilac.
+- **Orchid** = note-taking feature on orchard-core (Tauri, not Electron). Starts as the GUI for the Lilac host, then grows note features.
+- **Wisteria** = browser feature, deferred; later embeds a Chromium backend feeding into Orchard's Tauri.
+- **Lilac** = browser-record storage. Built now to defer Wisteria with peace of mind; later remains useful as a standalone tool for separate browsers, and is also controlled by Orchard.
+- **Magic Paper** = a canvas view type over the same store (not a separate app).
+
+Core grows block awareness (Lilac benefits too). Timing: Orchid storage waits for Lilac's block-level evolution; Orchid editor/parser can start against a mock store now.
+
 ## Status
 
 Design discussion only. No implementation. Lilac v0.1 is the first concrete deliverable under this umbrella.
