@@ -53,8 +53,32 @@
             if (el.style.display === "block") { el.style.display = "none"; return; }
             try {
               const blocks = JSON.parse(await invoke("get_blocks", { id }));
-              el.innerHTML = blocks.map((b) => `<div><b>${esc(b.kind && b.kind.Heading ? "H" + b.kind.Heading.level : (b.kind && typeof b.kind === "string" ? b.kind : JSON.stringify(b.kind)))}</b> ${esc((b.content || "").slice(0, 120))}</div>`).join("");
+              el.innerHTML = blocks.map((b) => {
+                const kind = b.kind && b.kind.Heading ? "H" + b.kind.Heading.level : (typeof b.kind === "string" ? b.kind : "block");
+                const bid = b.id || "";
+                return `<div class="blk" data-bid="${esc(bid)}" style="padding:4px; border:1px solid #45475a; border-radius:4px; margin:2px 0; cursor:text;">
+                  <b>${esc(kind)}</b>
+                  <div class="blkcontent" style="white-space:pre-wrap;">${esc(b.content || "")}</div>
+                  <textarea class="blkedit" style="display:none; width:100%; min-height:60px; background:#313244; color:#cdd6f4; border:1px solid #45475a; border-radius:4px;">${esc(b.content || "")}</textarea>
+                </div>`;
+              }).join("");
               el.style.display = "block";
+              // wire edit: click content -> show textarea; blur -> save
+              el.querySelectorAll(".blk").forEach((blk) => {
+                const bid = blk.dataset.bid;
+                if (!bid) return;
+                const content = blk.querySelector(".blkcontent");
+                const ta = blk.querySelector(".blkedit");
+                if (!content || !ta) return;
+                content.addEventListener("click", (e) => { e.stopPropagation(); content.style.display = "none"; ta.style.display = "block"; ta.focus(); });
+                ta.addEventListener("blur", async () => {
+                  const newVal = ta.value;
+                  ta.style.display = "none";
+                  content.style.display = "block";
+                  content.textContent = newVal;
+                  try { await invoke("apply_block_edit_cmd", { id, blockId: bid, newContent: newVal }); } catch (e) { footer.textContent = "Edit error: " + e; }
+                });
+              });
             } catch (e) { el.textContent = "Error: " + e; el.style.display = "block"; }
           });
         });
