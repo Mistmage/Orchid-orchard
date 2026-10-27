@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Orchard</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #1e1e2e; color: #cdd6f4; }
+    header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+    h1 { font-size: 20px; margin: 0; }
+    input { padding: 6px 10px; border-radius: 6px; border: 1px solid #45475a; background: #313244; color: #cdd6f4; width: 320px; }
+    .list { display: grid; gap: 8px; max-height: 80vh; overflow: auto; margin-top: 12px; }
+    .card { background: #181825; border: 1px solid #45475a; border-radius: 8px; padding: 10px; }
+    .card .title { font-weight: 600; }
+    .card .meta { font-size: 12px; color: #a6adc8; margin-top: 4px; }
+    .card .tags { font-size: 12px; color: #89b4fa; margin-top: 4px; }
+    footer { margin-top: 8px; font-size: 12px; color: #a6adc8; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Orchard</h1>
+    <input id="q" placeholder="search (tag:rust, type:page, ...)" />
+  </header>
+  <div id="root" class="list">Loading…</div>
+  <footer id="footer"></footer>
+  <script>
+    const { invoke } = window.__TAURI__.core;
+    const root = document.getElementById("root");
+    const footer = document.getElementById("footer");
+    const q = document.getElementById("q");
+
+    async function load(query) {
+      root.innerHTML = "Loading…";
+      try {
+        const items = query
+          ? await invoke("search", { query })
+          : await invoke("list_records");
+        if (!items.length) { root.innerHTML = "<div class='card'>No records.</div>"; return; }
+        root.innerHTML = items.map((r) => `
+          <div class="card">
+            <div class="title">${esc(r.title || r.id)}</div>
+            <div class="meta">${esc(r.id)} · ${esc(r.type)}${r.status ? " · " + esc(r.status) : ""}</div>
+            <div class="tags">${(r.tags || []).map(esc).join(", ")}</div>
+          </div>
+        `).join("");
+      } catch (e) {
+        root.innerHTML = "<div class='card'>Error: " + esc(String(e)) + "</div>";
+      }
+    }
+
+    function esc(s) { return String(s == null ? "" : s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+
+    q.addEventListener("input", () => load(q.value.trim()));
+    q.addEventListener("keydown", (e) => { if (e.key === "Enter") load(q.value.trim()); });
+
+    (async () => {
+      const p = await invoke("records_root_path");
+      footer.textContent = "Records: " + p;
+      await load("");
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+[package]
+name = "orchard"
+version = "0.1.0"
+description = "Orchard — local-first knowledge/workspace shell"
+authors = ["Mistmage"]
+edition = "2021"
+
+[lib]
+name = "orchard_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["wry"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+lilac-core = { path = "../../../crates/lilac-core" }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

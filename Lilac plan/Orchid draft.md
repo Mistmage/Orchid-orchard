@@ -42,9 +42,16 @@ When Orchid arrives, a Lilac record is just a record with `type: page`/`collecti
 ## Refined role (from discussion)
 
 - Orchid is the **note-taking feature** on orchard-core, not a separate product.
-- Built on Tauri (not Electron). Starts as the GUI for the Lilac host (more valuable than Orchid-as-product initially), then grows note features around it.
-- Core must grow block awareness; Lilac benefits from this too.
+- Built on **Tauri + SolidJS** (not Electron). Tauri renders; Rust is sole authority.
+- **No JS editor library owns document structure** (no ProseMirror/CodeMirror/Tiptap). Blocks are plain-text-ish with a half-hidden internal hierarchy; Rust owns the buffer, block tree, IDs, and mutations. Frontend is a thin renderer fed Rust-originating transactions. This is the Helix-for-brains idea: modal editing + block model in Rust, webview only paints.
+- Core must grow block awareness (block identity, surgical edits, byte spans, WAL, external-edit reconciliation); Lilac benefits from this too.
+- Block identity is type-aware: headings get IDs eagerly; `---` separators and other blocks only when referenced (lazy); YAML frontmatter IDs eager. Content hash as fallback.
 - Timing: editor/parser can start against a mock store now; storage integration waits for Lilac's block-level evolution.
+- Later, Wisteria does the same pattern (Rust authority, thin renderer). Routing between Orchid and Wisteria views is static ("webtau"). Wisteria later embeds a Chromium backend.
+
+## Implementation status
+
+Scaffolded: `apps/orchard` — Tauri v2 shell (SolidJS-less, vanilla JS renderer) wiring `lilac-core` via Tauri commands (list_records, search, load_record, records_root_path). Rust is sole authority; frontend is a thin renderer. Builds and runs on Windows. Block editor and note features are next.
 
 ## Status
 
