@@ -29,3 +29,6 @@ build/
 
 # Dev records (default records root when running install script from project)
 Lilac/
+
+# Tauri generated
+apps/orchard/src-tauri/gen/
