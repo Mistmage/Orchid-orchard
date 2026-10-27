@@ -13,13 +13,12 @@ fn main() {
     let _ = std::fs::create_dir_all(logs_dir());
     let log_path = logs_dir().join("host.log");
     // simple: append via eprintln is not used; we write to file best-effort.
-    let (cfg, records_root) = load_config();
-    let _ = cfg;
-
-    // main loop
+    // main loop: re-read config each request so set_records_root takes effect
+    // without restarting the host.
     loop {
         match read_message() {
             Ok(Some(msg)) => {
+                let (_cfg, records_root) = load_config();
                 let resp = handle(&records_root, msg);
                 if let Err(e) = write_message(&resp) {
                     log(&log_path, &format!("write error: {}", e));

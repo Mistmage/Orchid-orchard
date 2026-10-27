@@ -102,4 +102,18 @@ $("#openFolder").addEventListener("click", async () => {
   }
 });
 
+$("#changeFolder").addEventListener("click", async () => {
+  const cfg = await call("getConfig");
+  const current = (cfg && cfg.result && cfg.result.records_root) || "";
+  const next = prompt("Records folder path:", current);
+  if (!next) return;
+  setStatus("Updating folder...");
+  const resp = await call("setRecordsRoot", { path: next });
+  if (resp && resp.ok) {
+    setStatus("Records: " + (resp.result && resp.result.records_root));
+  } else {
+    setStatus("Error: " + (resp && resp.error));
+  }
+});
+
 render();
