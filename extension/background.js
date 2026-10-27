@@ -94,7 +94,23 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       } else if (msg.type === "snapshotCurrentTab") {
         // Chrome-only: capture current tab as MHTML and store as an asset.
         if (!chrome.pageCapture || !chrome.pageCapture.saveAsMHTML) {
-          sendResponse({ ok: false, error: "pageCapture not supported in this browser" });
+          // Fallback: extract HTML via content script (cross-browser).
+          try {
+            const tabs2 = await chrome.tabs.query({ active: true, currentWindow: true });
+            const t2 = tabs2 && tabs2[0];
+            if (!t2) throw new Error("no active tab");
+            const htmlResp = await new Promise((resolve) => {
+              chrome.tabs.sendMessage(t2.id, { type: "extractHtml" }, (r) => resolve(r));
+            });
+            if (!htmlResp || !htmlResp.ok) throw new Error((htmlResp && htmlResp.error) || "extract failed");
+            const b64 = btoa(unescape(encodeURIComponent(htmlResp.html)));
+            const asset = await send("save_asset", { data: b64, ext: "html", subdir: "Assets" });
+            const record = { type: "page", title: htmlResp.title || t2.title || "", url: htmlResp.url || t2.url || "", tags: [], snapshot: asset.path, snapshot_format: "html" };
+            const rec = await send("save_record", { record, body: "" });
+            sendResponse({ ok: true, result: { record: rec, asset } });
+          } catch (e) {
+            sendResponse({ ok: false, error: String(e && e.message ? e.message : e) });
+          }
           return;
         }
         const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
