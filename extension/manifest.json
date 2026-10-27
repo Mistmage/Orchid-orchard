@@ -3,7 +3,7 @@
   "name": "Lilac",
   "version": "0.1.0",
   "description": "Save tabs as Markdown/YAML records on disk. Cross-browser, Git-friendly.",
-  "permissions": ["tabs", "storage", "nativeMessaging"],
+  "permissions": ["tabs", "storage", "nativeMessaging", "pageCapture"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup/popup.html",

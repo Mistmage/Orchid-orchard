@@ -78,7 +78,8 @@ async function openEditor(id) {
   const html = `
     <div class="item">
       <div class="title">Edit: ${escape(r.id)}</div>
-      <label>Title<br><input id="e-title" value="${escape(r.title || "")}" style="width:100%" /></label><br>
+      <label>Title<br><input id="e-title" value="${escape(r.title || "")}" style="width:100%" /></label>
+      <button id="e-autoname" style="margin:4px 0;">Auto-name</button><br>
       <label>Tags (comma)<br><input id="e-tags" value="${escape(tags)}" style="width:100%" /></label><br>
       <label>Status<br><input id="e-status" value="${escape(r.status || "")}" style="width:100%" /></label><br>
       <label>Notes<br><textarea id="e-body" style="width:100%; height:80px;">${escape(body)}</textarea></label><br>
@@ -90,6 +91,13 @@ async function openEditor(id) {
   `;
   list.innerHTML = html;
   on("#e-cancel", "click", render);
+  const autoBtn = $("#e-autoname");
+  if (autoBtn) autoBtn.addEventListener("click", async () => {
+    const record = { type: r.type, title: r.title, url: r.url, tags: r.tags || [] };
+    const rule = { strip: [" - GitHub", " | Hacker News", " - YouTube"], replace: [], prefix: null, suffix: null, max_len: null };
+    const resp = await call("deriveTitle", { record, rule });
+    if (resp && resp.ok && resp.result && resp.result.title) $("#e-title").value = resp.result.title;
+  });
   on("#e-save", "click", async () => {
     const patch = {
       title: $("#e-title").value,

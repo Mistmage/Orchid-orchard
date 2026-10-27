@@ -3,7 +3,8 @@ mod config;
 use base64::Engine;
 use config::{load_config, logs_dir, set_records_root};
 use lilac_core::{
-    Record, delete_record, read_record, rebuild_index, record_path, search_records, write_record,
+    NamingConfig, NamingRule, Record, delete_record, read_record, rebuild_index, record_path,
+    search_records, write_record,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -230,6 +231,19 @@ fn dispatch(records_root: &std::path::Path, method: &str, params: Value) -> Resu
             let subdir = records_root.join("Records");
             collect_conflicts(&subdir, records_root, &mut out);
             Ok(json!({ "conflicts": out }))
+        }
+        "derive_title" => {
+            let record_val = params.get("record").cloned().ok_or("missing record")?;
+            let record: Record = serde_json::from_value(record_val).map_err(|e| e.to_string())?;
+            let rule: NamingRule = params
+                .get("rule")
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e: serde_json::Error| e.to_string())?
+                .unwrap_or_default();
+            let cfg = NamingConfig { rules: vec![rule] };
+            Ok(json!({ "title": cfg.derive_title(&record) }))
         }
         _ => Err(format!("unknown method: {}", method)),
     }

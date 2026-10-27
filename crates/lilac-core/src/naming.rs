@@ -5,7 +5,7 @@
 
 use crate::record::Record;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct NamingRule {
     /// Substrings to remove (case-sensitive) from the base title.
     pub strip: Vec<String>,
@@ -19,7 +19,7 @@ pub struct NamingRule {
     pub max_len: Option<usize>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct NamingConfig {
     pub rules: Vec<NamingRule>,
 }
