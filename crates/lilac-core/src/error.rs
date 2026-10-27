@@ -22,4 +22,7 @@ pub enum Error {
 
     #[error("file contains conflict markers: {0}")]
     Conflict(String),
+
+    #[error("file changed since last read: {0}")]
+    Stale(String),
 }

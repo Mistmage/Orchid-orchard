@@ -21,7 +21,8 @@ pub use naming::{NamingConfig, NamingRule};
 pub use record::Record;
 pub use rules::{Action, Condition, Rule, RuleSet, Value, apply_rules, parse_rules};
 pub use storage::{
-    Index, IndexEntry, delete_record, read_record, rebuild_index, record_filename, record_path,
-    records_dir, search_records, slugify_title, write_record,
+    Index, IndexEntry, delete_record, read_record, read_record_with_mtime, rebuild_index,
+    record_filename, record_path, records_dir, search_records, slugify_title, write_record,
+    write_record_if_unchanged,
 };
 pub use wal::{Wal, WalEntry};

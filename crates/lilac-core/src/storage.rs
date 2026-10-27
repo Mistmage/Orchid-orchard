@@ -92,6 +92,43 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
+/// Read a record and return its last-modified time (seconds since epoch) for
+/// optimistic-concurrency checks.
+pub fn read_record_with_mtime(path: &Path) -> Result<(Record, Option<String>, u64), Error> {
+    let meta = fs::metadata(path)?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let (rec, body) = read_record(path)?;
+    Ok((rec, body, mtime))
+}
+
+/// Write a record only if the file's mtime matches `expected_mtime`.
+/// Returns `Error::Stale` if the file changed since the read.
+pub fn write_record_if_unchanged(
+    path: &Path,
+    record: &Record,
+    body: Option<&str>,
+    expected_mtime: u64,
+) -> Result<(), Error> {
+    if path.exists() {
+        let meta = fs::metadata(path)?;
+        let cur = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if cur != expected_mtime {
+            return Err(Error::Stale(path.to_string_lossy().to_string()));
+        }
+    }
+    write_record(path, record, body)
+}
+
 pub fn delete_record(path: &Path) -> Result<(), Error> {
     if path.exists() {
         fs::remove_file(path)?;

@@ -1,5 +1,6 @@
 use lilac_core::{
-    Record, delete_record, read_record, rebuild_index, record_path, search_records, write_record,
+    Record, delete_record, read_record, read_record_with_mtime, rebuild_index, record_path,
+    search_records, write_record, write_record_if_unchanged,
 };
 use tempfile::TempDir;
 
@@ -158,6 +159,32 @@ fn delete_record_removes_file() {
     assert!(path.exists());
     delete_record(&path).unwrap();
     assert!(!path.exists());
+}
+
+#[test]
+fn optimistic_concurrency_stale() {
+    let root = make_root();
+    let r = Record::new("rec_oc", "page");
+    let path = record_path(root.path(), &r);
+    write_record(&path, &r, None).unwrap();
+    let (r2, _body, mtime) = read_record_with_mtime(&path).unwrap();
+    // external modification
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    write_record(&path, &r2, Some("changed")).unwrap();
+    // now write with stale mtime should fail
+    let res = write_record_if_unchanged(&path, &r2, Some("mine"), mtime);
+    assert!(matches!(res, Err(lilac_core::Error::Stale(_))));
+}
+
+#[test]
+fn optimistic_concurrency_ok() {
+    let root = make_root();
+    let r = Record::new("rec_ok2", "page");
+    let path = record_path(root.path(), &r);
+    write_record(&path, &r, None).unwrap();
+    let (r2, _body, mtime) = read_record_with_mtime(&path).unwrap();
+    let res = write_record_if_unchanged(&path, &r2, Some("mine"), mtime);
+    assert!(res.is_ok());
 }
 
 #[test]
