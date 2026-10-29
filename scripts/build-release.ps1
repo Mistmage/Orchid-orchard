@@ -29,7 +29,7 @@ if (Test-Path $orchard) {
     Push-Location $orchard
     cargo build --release
     Pop-Location
-    $orchardBin = Join-Path $root "target\release\orchard.exe"
+    $orchardBin = Join-Path $root "apps\orchard\src-tauri\target\release\orchard.exe"
     if (Test-Path $orchardBin) { Copy-Item $orchardBin (Join-Path $OutDir "orchard.exe") -Force }
 }
 
