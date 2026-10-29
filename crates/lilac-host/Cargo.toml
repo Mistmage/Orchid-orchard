@@ -7,6 +7,10 @@ authors.workspace = true
 repository.workspace = true
 description = "Lilac native messaging host (browser <-> record store)."
 
+[lib]
+name = "lilac_host"
+path = "src/lib.rs"
+
 [[bin]]
 name = "lilac-host"
 path = "src/main.rs"

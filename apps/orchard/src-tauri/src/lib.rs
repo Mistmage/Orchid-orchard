@@ -123,6 +123,11 @@ fn register_native_host(extension_id: String, host_binary_path: Option<String>) 
     let manifest_dir = dirs_local_app_data().join("Lilac");
     std::fs::create_dir_all(&manifest_dir).map_err(|e| e.to_string())?;
     let manifest_path = manifest_dir.join("lilac_host.json");
+    // wrapper so the browser invokes orchard.exe in host mode
+    let wrapper_path = manifest_dir.join("lilac-host.bat");
+    let wrapper = format!("@echo off\r\n\"{}\" --host", host_bin.to_string_lossy());
+    std::fs::write(&wrapper_path, wrapper).map_err(|e| e.to_string())?;
+
     let allowed = if extension_id.is_empty() {
         "[]".to_string()
     } else {
@@ -130,7 +135,7 @@ fn register_native_host(extension_id: String, host_binary_path: Option<String>) 
     };
     let manifest = format!(
         r#"{{"name":"lilac_host","description":"Lilac record storage native host","path":"{}","type":"stdio","allowed_origins":{},"allowed_extensions":["lilac@orchid"]}}"#,
-        host_bin.to_string_lossy().replace('\\', "\\\\"),
+        wrapper_path.to_string_lossy().replace('\\', "\\\\"),
         allowed
     );
     std::fs::write(&manifest_path, manifest).map_err(|e| e.to_string())?;

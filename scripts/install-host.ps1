@@ -18,7 +18,7 @@
   .\install-host.ps1 -ExtensionId "..." -RecordsRoot "D:\Notes\Lilac"
 #>
 param(
-    [string]$BinaryPath = (Join-Path $PSScriptRoot "..\target\debug\lilac-host.exe"),
+    [string]$BinaryPath = (Join-Path $PSScriptRoot "..\apps\orchard\src-tauri\target\debug\orchard.exe"),
     [string]$ExtensionId = "",
     [string]$RecordsRoot = (Join-Path (Get-Location) "Lilac")
 )
@@ -33,9 +33,14 @@ if (-not (Test-Path $BinaryPath)) {
 $RecordsRoot = [System.IO.Path]::GetFullPath($RecordsRoot)
 New-Item -ItemType Directory -Force -Path $RecordsRoot | Out-Null
 
+# Orchard is the single binary; native messaging needs a --host flag, so use a wrapper.
 $manifestDir = Join-Path $env:LOCALAPPDATA "Lilac"
 New-Item -ItemType Directory -Force -Path $manifestDir | Out-Null
 $manifestPath = Join-Path $manifestDir "lilac_host.json"
+$wrapperPath = Join-Path $manifestDir "lilac-host.bat"
+$wrapper = "@echo off`r`n`"$BinaryPath`" --host"
+Set-Content -Path $wrapperPath -Value $wrapper -Encoding ASCII
+Write-Host "Wrote wrapper: $wrapperPath"
 
 $allowedOrigins = @()
 if ($ExtensionId -ne "") {
@@ -47,7 +52,7 @@ if ($ExtensionId -ne "") {
 $manifest = [ordered]@{
     name = "lilac_host"
     description = "Lilac record storage native host"
-    path = $BinaryPath
+    path = $wrapperPath
     type = "stdio"
     allowed_origins = $allowedOrigins
     allowed_extensions = @("lilac@orchid")
