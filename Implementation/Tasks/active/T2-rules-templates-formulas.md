@@ -15,4 +15,5 @@ Minimal rule engine done: `when`/`then`, `and`/`or`/`not`, `==`/`!=`/`contains`/
 "Apply rules" button, rules file at `~/.orchard/.lilac/rules.txt`.
 
 Remaining: templates (new records from a template record), formula grammar
-refinement (Obsidian Bases-like), per-domain rules, rule scheduling.
+refinement (Obsidian Bases-like: https://obsidian.md/help/formulas), per-domain
+rules, rule scheduling. `.base` files supported as a type of Flower.
