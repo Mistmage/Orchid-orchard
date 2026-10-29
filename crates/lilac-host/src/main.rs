@@ -98,8 +98,34 @@ fn dispatch(records_root: &std::path::Path, method: &str, params: Value) -> Resu
         "get_config" => {
             let rr = records_root.to_string_lossy().to_string();
             Ok(
-                json!({ "records_root": rr, "config_root": config::config_root().to_string_lossy() }),
+                {
+                  let (cfg, _) = config::load_config();
+                  let orchid = config::load_orchid_config();
+                  let mut folders = cfg.registered_folders.clone();
+                  if folders.is_empty() {
+                      folders = orchid.registered_folders.clone();
+                  }
+                  json!({
+                      "records_root": rr,
+                      "config_root": config::config_root().to_string_lossy(),
+                      "registered_folders": folders,
+                  })
+              },
             )
+        }
+        "set_registered_folders" => {
+            let folders: Vec<String> = params
+                .get("folders")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            let mut oc = config::load_orchid_config();
+            oc.registered_folders = folders.clone();
+            config::save_orchid_config(&oc)?;
+            let mut lc = config::load_config().0;
+            lc.registered_folders = folders.clone();
+            config::save_config(&lc)?;
+            Ok(json!({ "registered_folders": folders }))
         }
         "set_records_root" => {
             let new = params
@@ -281,6 +307,40 @@ fn dispatch(records_root: &std::path::Path, method: &str, params: Value) -> Resu
                 .map(|a| json!({ "action": format!("{:?}", a) }))
                 .collect();
             Ok(json!({ "record": record, "fired": fired_json }))
+        }
+        "move_record" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or("missing id")?;
+            let folder = params.get("folder").and_then(|v| v.as_str()).unwrap_or("");
+            let path = find_record_path(records_root, id).ok_or_else(|| format!("not found: {}", id))?;
+            let (mut rec, body) = read_record(&path).map_err(|e| e.to_string())?;
+            if folder.trim().is_empty() {
+                rec.folder = None;
+            } else {
+                rec.folder = Some(folder.trim().to_string());
+            }
+            let new_path = record_path(records_root, &rec);
+            if new_path != path {
+                if let Some(parent) = new_path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                // write to new path first, then remove old
+                write_record(&new_path, &rec, body.as_deref()).map_err(|e| e.to_string())?;
+                let _ = std::fs::remove_file(&path);
+            } else {
+                write_record(&path, &rec, body.as_deref()).map_err(|e| e.to_string())?;
+            }
+            Ok(json!({ "id": rec.id, "path": new_path.to_string_lossy() }))
+        }
+        "move_file" => {
+            let src = params.get("src").and_then(|v| v.as_str()).ok_or("missing src")?;
+            let dst = params.get("dst").and_then(|v| v.as_str()).ok_or("missing dst")?;
+            let src_p = PathBuf::from(src);
+            let dst_p = PathBuf::from(dst);
+            if let Some(parent) = dst_p.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            std::fs::rename(&src_p, &dst_p).map_err(|e| e.to_string())?;
+            Ok(json!({ "src": src, "dst": dst }))
         }
         _ => Err(format!("unknown method: {}", method)),
     }

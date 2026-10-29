@@ -106,6 +106,71 @@ fn records_root_path() -> String {
 }
 
 #[tauri::command]
+fn register_native_host(extension_id: String, host_binary_path: Option<String>) -> Result<String, String> {
+    // Resolve host binary path.
+    let host_bin = if let Some(p) = host_binary_path {
+        std::path::PathBuf::from(p)
+    } else {
+        // default: sibling of orchard.exe
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("lilac-host.exe")))
+            .unwrap_or_else(|| std::path::PathBuf::from("lilac-host.exe"))
+    };
+    if !host_bin.exists() {
+        return Err(format!("host binary not found: {}", host_bin.display()));
+    }
+    let manifest_dir = dirs_local_app_data().join("Lilac");
+    std::fs::create_dir_all(&manifest_dir).map_err(|e| e.to_string())?;
+    let manifest_path = manifest_dir.join("lilac_host.json");
+    let allowed = if extension_id.is_empty() {
+        "[]".to_string()
+    } else {
+        format!("[\"chrome-extension://{}/\"]", extension_id)
+    };
+    let manifest = format!(
+        r#"{{"name":"lilac_host","description":"Lilac record storage native host","path":"{}","type":"stdio","allowed_origins":{},"allowed_extensions":["lilac@orchid"]}}"#,
+        host_bin.to_string_lossy().replace('\\', "\\\\"),
+        allowed
+    );
+    std::fs::write(&manifest_path, manifest).map_err(|e| e.to_string())?;
+
+    // Windows registry
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        for (root, sub) in [
+            ("HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts", "lilac_host"),
+            ("HKCU\\Software\\Mozilla\\NativeMessagingHosts", "lilac_host"),
+        ] {
+            let key = format!("{}\\{}", root, sub);
+            let _ = Command::new("reg")
+                .args(["add", &key, "/ve", "/d", manifest_path.to_str().unwrap_or(""), "/f"])
+                .output();
+        }
+    }
+    // Unix: write manifest files
+    #[cfg(not(target_os = "windows"))]
+    {
+        let home = std::env::var("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+        let chrome_dir = home.join(".config/google-chrome/NativeMessagingHosts");
+        let _ = std::fs::create_dir_all(&chrome_dir);
+        let _ = std::fs::write(chrome_dir.join("lilac_host.json"), std::fs::read_to_string(&manifest_path).unwrap_or_default());
+        let ff_dir = home.join(".mozilla/native-messaging-hosts");
+        let _ = std::fs::create_dir_all(&ff_dir);
+        let _ = std::fs::write(ff_dir.join("lilac_host.json"), std::fs::read_to_string(&manifest_path).unwrap_or_default());
+    }
+    Ok(format!("Registered host. Manifest: {}", manifest_path.display()))
+}
+
+fn dirs_local_app_data() -> std::path::PathBuf {
+    std::env::var("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(std::path::PathBuf::from))
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+}
+
+#[tauri::command]
 fn get_blocks(id: String) -> Result<String, String> {
     let root = records_root();
     let path = find_record_file(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
@@ -135,7 +200,8 @@ pub fn run() {
             load_record,
             get_blocks,
             apply_block_edit_cmd,
-            records_root_path
+            records_root_path,
+            register_native_host
         ])
         .run(tauri::generate_context!())
         .expect("error while running Orchard");

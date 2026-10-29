@@ -82,6 +82,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           url: t.url || "",
           tags: [],
         };
+        if (msg.folder) record.folder = msg.folder;
         // capture tab group metadata (hint; cross-browser rule: not authoritative)
         if (t.groupId && t.groupId !== -1 && chrome.tabGroups && chrome.tabGroups.get) {
           try {
@@ -140,6 +141,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       } else if (msg.type === "saveSelectedTabs") {
         const tabs = await chrome.tabs.query({ highlighted: true, currentWindow: true });
         const list = tabs && tabs.length ? tabs : await chrome.tabs.query({ currentWindow: true });
+        const folder = msg.folder || null;
         // capture shared tab group (if all selected tabs share one group)
         let sharedGroup = null;
         const groupIds = new Set(list.map((t) => t.groupId).filter((g) => g && g !== -1));
@@ -150,6 +152,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const ids = [];
         for (const t of list) {
           const record = { type: "page", title: t.title || "", url: t.url || "", tags: [] };
+          if (folder) record.folder = folder;
           if (t.groupId && t.groupId !== -1 && chrome.tabGroups && chrome.tabGroups.get) {
             try {
               const g = await chrome.tabGroups.get(t.groupId);
@@ -162,6 +165,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         // create collection
         const body = ids.map((id) => "- [[" + id + "]]").join("\n");
         const col = { type: "collection", title: "Saved tabs " + new Date().toISOString(), tags: [] };
+        if (folder) col.folder = folder;
         if (sharedGroup) col.tab_group = { title: sharedGroup.title || "", color: sharedGroup.color || "" };
         const cres = await send("save_record", { record: col, body });
         sendResponse({ ok: true, result: { count: list.length, collection: cres } });
@@ -189,6 +193,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ ok: true, result: res });
       } else if (msg.type === "rebuildIndex") {
         const res = await send("rebuild_index", {});
+        sendResponse({ ok: true, result: res });
+      } else if (msg.type === "setRegisteredFolders") {
+        const res = await send("set_registered_folders", { folders: msg.folders || [] });
         sendResponse({ ok: true, result: res });
       } else if (msg.type === "getConfig") {
         const res = await send("get_config", {});

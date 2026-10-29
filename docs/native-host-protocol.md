@@ -34,6 +34,8 @@ or
 | `get_config` | `{}` | `{ records_root, config_root }` |
 | `set_records_root` | `{ path }` | `{ records_root }` |
 | `open_folder` | `{ path? }` ("records"/"config"/abs path) | `{ path }` |
+| `move_record` | `{ id, folder }` | `{ id, path }` |
+| `move_file` | `{ src, dst }` | `{ src, dst }` |
 
 ## Installation
 

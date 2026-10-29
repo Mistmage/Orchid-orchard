@@ -8,6 +8,16 @@ pub struct Config {
     pub version: u32,
     #[serde(default)]
     pub records_root: Option<String>,
+    #[serde(default)]
+    pub registered_folders: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OrchidConfig {
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub registered_folders: Vec<String>,
 }
 
 impl Default for Config {
@@ -15,6 +25,7 @@ impl Default for Config {
         Self {
             version: 1,
             records_root: None,
+            registered_folders: Vec::new(),
         }
     }
 }
@@ -25,12 +36,14 @@ pub fn config_root() -> PathBuf {
     if let Ok(p) = std::env::var("LILAC_CONFIG_ROOT") {
         return PathBuf::from(p);
     }
-    let home = home_dir();
-    let orchard = home.join(".orchard").join(".lilac");
-    if orchard.exists() {
-        return orchard;
+    home_dir().join(".orchard").join(".lilac")
+}
+
+pub fn orchid_config_root() -> PathBuf {
+    if let Ok(p) = std::env::var("ORCHID_CONFIG_ROOT") {
+        return PathBuf::from(p);
     }
-    home.join(".lilac")
+    home_dir().join(".orchard").join(".orchid")
 }
 
 pub fn home_dir() -> PathBuf {
@@ -47,11 +60,34 @@ pub fn default_records_root() -> PathBuf {
     home_dir().join("Documents").join("Lilac")
 }
 
+pub fn load_orchid_config() -> OrchidConfig {
+    let root = orchid_config_root();
+    let _ = fs::create_dir_all(&root);
+    let path = root.join("config.yaml");
+    if path.exists() {
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_yaml::from_str(&s).ok())
+            .unwrap_or_default()
+    } else {
+        OrchidConfig::default()
+    }
+}
+
+pub fn save_orchid_config(cfg: &OrchidConfig) -> Result<(), String> {
+    let root = orchid_config_root();
+    let _ = fs::create_dir_all(&root);
+    let path = root.join("config.yaml");
+    let yaml = serde_yaml::to_string(cfg).map_err(|e| e.to_string())?;
+    fs::write(&path, yaml).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn load_config() -> (Config, PathBuf) {
     let root = config_root();
     let _ = fs::create_dir_all(&root);
     let path = root.join("config.yaml");
-    let cfg: Config = if path.exists() {
+    let mut cfg: Config = if path.exists() {
         fs::read_to_string(&path)
             .ok()
             .and_then(|s| serde_yaml::from_str(&s).ok())
@@ -59,6 +95,10 @@ pub fn load_config() -> (Config, PathBuf) {
     } else {
         Config::default()
     };
+    // pull registered folders from orchid config if lilac's is empty
+    if cfg.registered_folders.is_empty() {
+        cfg.registered_folders = load_orchid_config().registered_folders;
+    }
     // ensure records root
     let records_root = cfg
         .records_root

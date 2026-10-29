@@ -96,6 +96,17 @@ export default function App() {
         />
         <button onClick={() => load()}>Search</button>
       </header>
+      <div style={{ "margin-bottom": "12px", display: "flex", gap: "8px", "align-items": "center", "flex-wrap": "wrap" }}>
+        <input id="extid" placeholder="Chrome extension ID (for host registration)" style={{ width: "360px", padding: "6px 10px", "border-radius": "6px", border: "1px solid #45475a", background: "#313244", color: "#cdd6f4" }} />
+        <button onClick={async () => {
+          const id = (document.getElementById("extid") as HTMLInputElement)?.value || "";
+          try {
+            const r = await invoke("register_native_host", { extensionId: id, hostBinaryPath: null });
+            alert(r);
+          } catch (e) { alert("Error: " + e); }
+        }}>Register native host</button>
+        <span style={{ "font-size": "12px", color: "#a6adc8" }}>Registers lilac-host for Chrome + Firefox.</span>
+      </div>
       <div style={{ display: "grid", gap: "8px", "max-height": "80vh", "overflow": "auto", "margin-top": "12px" }}>
         <For each={records()}>
           {(r) => (
