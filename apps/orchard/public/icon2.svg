@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="petal2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f9a8d4"/>
+      <stop offset="100%" stop-color="#be185d"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="30" fill="#1e1e2e"/>
+  <!-- sideways V flower: petals spread left/right and down -->
+  <g fill="url(#petal2)" opacity="0.95">
+    <ellipse cx="18" cy="26" rx="10" ry="6" transform="rotate(-30 18 26)"/>
+    <ellipse cx="46" cy="26" rx="10" ry="6" transform="rotate(30 46 26)"/>
+    <ellipse cx="24" cy="42" rx="10" ry="6" transform="rotate(-60 24 42)"/>
+    <ellipse cx="40" cy="42" rx="10" ry="6" transform="rotate(60 40 42)"/>
+    <ellipse cx="32" cy="50" rx="9" ry="6"/>
+  </g>
+  <circle cx="32" cy="26" r="7" fill="#fde68a"/>
+  <circle cx="32" cy="26" r="3" fill="#1e1e2e"/>
+</svg>
