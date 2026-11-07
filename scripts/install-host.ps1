@@ -2,8 +2,13 @@
 .SYNOPSIS
   Register the Lilac native messaging host for Chrome and Firefox on Windows.
 
+.DESCRIPTION
+  Orchard is a single executable: the browser launches orchard.exe and it
+  detects host mode from the browser's --parent-window argument / stdio pipes.
+  There is no separate lilac-host.exe to install.
+
 .PARAMETER BinaryPath
-  Absolute path to lilac-host.exe. Default: ..\target\debug\lilac-host.exe (relative to this script).
+  Absolute path to orchard.exe. Default: ..\apps\orchard\src-tauri\target\debug\orchard.exe
 
 .PARAMETER ExtensionId
   Chrome extension ID (from chrome://extensions). Required for Chrome allowed_origins.
@@ -27,20 +32,15 @@ $ErrorActionPreference = "Stop"
 
 $BinaryPath = (Resolve-Path $BinaryPath).Path
 if (-not (Test-Path $BinaryPath)) {
-    throw "Binary not found: $BinaryPath. Build first: cargo build -p lilac-host"
+    throw "Binary not found: $BinaryPath. Build first: cd apps\orchard\src-tauri; cargo build"
 }
 
 $RecordsRoot = [System.IO.Path]::GetFullPath($RecordsRoot)
 New-Item -ItemType Directory -Force -Path $RecordsRoot | Out-Null
 
-# Orchard is the single binary; native messaging needs a --host flag, so use a wrapper.
 $manifestDir = Join-Path $env:LOCALAPPDATA "Lilac"
 New-Item -ItemType Directory -Force -Path $manifestDir | Out-Null
 $manifestPath = Join-Path $manifestDir "lilac_host.json"
-$wrapperPath = Join-Path $manifestDir "lilac-host.bat"
-$wrapper = "@echo off`r`n`"$BinaryPath`" --host"
-Set-Content -Path $wrapperPath -Value $wrapper -Encoding ASCII
-Write-Host "Wrote wrapper: $wrapperPath"
 
 $allowedOrigins = @()
 if ($ExtensionId -ne "") {
@@ -52,13 +52,13 @@ if ($ExtensionId -ne "") {
 $manifest = [ordered]@{
     name = "lilac_host"
     description = "Lilac record storage native host"
-    path = $wrapperPath
+    path = $BinaryPath
     type = "stdio"
     allowed_origins = $allowedOrigins
     allowed_extensions = @("lilac@orchid")
 }
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -Path $manifestPath -Encoding UTF8
-Write-Host "Wrote manifest: $manifestPath"
+Write-Host "Wrote manifest: $manifestPath (host: $BinaryPath)"
 
 # Chrome registry
 $chromeKey = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\lilac_host"
@@ -72,8 +72,8 @@ New-Item -Path $ffKey -Force | Out-Null
 Set-ItemProperty -Path $ffKey -Name "(Default)" -Value $manifestPath
 Write-Host "Registered Firefox host."
 
-# Write records_root into config.yaml (merge, don't clobber).
-$configRoot = Join-Path $env:USERPROFILE ".lilac"
+# Write records_root into the shared Orchard config (merge, don't clobber).
+$configRoot = Join-Path $env:USERPROFILE ".orchard\.lilac"
 New-Item -ItemType Directory -Force -Path $configRoot | Out-Null
 $configPath = Join-Path $configRoot "config.yaml"
 $lines = @()

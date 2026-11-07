@@ -26,25 +26,9 @@ impl From<Record> for RecordView {
 }
 
 fn records_root() -> PathBuf {
-    // Reuse Lilac's config resolution by reading ~/.lilac/config.yaml.
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
-    let cfg_path = home.join(".lilac").join("config.yaml");
-    if let Ok(s) = std::fs::read_to_string(&cfg_path) {
-        // crude parse: find records_root: "..."
-        for line in s.lines() {
-            let line = line.trim();
-            if let Some(rest) = line.strip_prefix("records_root:") {
-                let v = rest.trim().trim_matches('"');
-                if !v.is_empty() {
-                    return PathBuf::from(v);
-                }
-            }
-        }
-    }
-    home.join("Documents").join("Lilac")
+    // Single source of truth: the same loader the native messaging host uses.
+    let (_cfg, root) = lilac_host::config::load_config();
+    root
 }
 
 #[tauri::command]
@@ -106,16 +90,45 @@ fn records_root_path() -> String {
 }
 
 #[tauri::command]
+fn get_settings() -> serde_json::Value {
+    let (cfg, root) = lilac_host::config::load_config();
+    let orchid = lilac_host::config::load_orchid_config();
+    let mut folders = cfg.registered_folders.clone();
+    if folders.is_empty() {
+        folders = orchid.registered_folders.clone();
+    }
+    serde_json::json!({
+        "records_root": root.to_string_lossy(),
+        "config_root": lilac_host::config::config_root().to_string_lossy(),
+        "registered_folders": folders,
+        "extension_id": orchid.extension_id.clone().unwrap_or_default(),
+    })
+}
+
+#[tauri::command]
+fn set_registered_folders_cmd(folders: Vec<String>) -> Result<Vec<String>, String> {
+    let mut orchid = lilac_host::config::load_orchid_config();
+    orchid.registered_folders = folders.clone();
+    lilac_host::config::save_orchid_config(&orchid)?;
+    let mut cfg = lilac_host::config::load_config().0;
+    cfg.registered_folders = folders.clone();
+    lilac_host::config::save_config(&cfg)?;
+    Ok(folders)
+}
+
+#[tauri::command]
+fn set_records_root_cmd(path: String) -> Result<String, String> {
+    let p = lilac_host::config::set_records_root(&path)?;
+    Ok(p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
 fn register_native_host(extension_id: String, host_binary_path: Option<String>) -> Result<String, String> {
-    // Resolve host binary path.
-    let host_bin = if let Some(p) = host_binary_path {
-        std::path::PathBuf::from(p)
-    } else {
-        // default: sibling of orchard.exe
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join("lilac-host.exe")))
-            .unwrap_or_else(|| std::path::PathBuf::from("lilac-host.exe"))
+    // Orchard is the single executable: the browser runs orchard.exe itself and
+    // host mode is auto-detected (--parent-window / stdio pipes).
+    let host_bin = match host_binary_path {
+        Some(p) => std::path::PathBuf::from(p),
+        None => std::env::current_exe().map_err(|e| e.to_string())?,
     };
     if !host_bin.exists() {
         return Err(format!("host binary not found: {}", host_bin.display()));
@@ -123,10 +136,6 @@ fn register_native_host(extension_id: String, host_binary_path: Option<String>) 
     let manifest_dir = dirs_local_app_data().join("Lilac");
     std::fs::create_dir_all(&manifest_dir).map_err(|e| e.to_string())?;
     let manifest_path = manifest_dir.join("lilac_host.json");
-    // wrapper so the browser invokes orchard.exe in host mode
-    let wrapper_path = manifest_dir.join("lilac-host.bat");
-    let wrapper = format!("@echo off\r\n\"{}\" --host", host_bin.to_string_lossy());
-    std::fs::write(&wrapper_path, wrapper).map_err(|e| e.to_string())?;
 
     let allowed = if extension_id.is_empty() {
         "[]".to_string()
@@ -135,10 +144,15 @@ fn register_native_host(extension_id: String, host_binary_path: Option<String>) 
     };
     let manifest = format!(
         r#"{{"name":"lilac_host","description":"Lilac record storage native host","path":"{}","type":"stdio","allowed_origins":{},"allowed_extensions":["lilac@orchid"]}}"#,
-        wrapper_path.to_string_lossy().replace('\\', "\\\\"),
+        host_bin.to_string_lossy().replace('\\', "\\\\"),
         allowed
     );
     std::fs::write(&manifest_path, manifest).map_err(|e| e.to_string())?;
+
+    // Persist the extension id so the settings UI can prefill it.
+    let mut orchid = lilac_host::config::load_orchid_config();
+    orchid.extension_id = if extension_id.is_empty() { None } else { Some(extension_id) };
+    lilac_host::config::save_orchid_config(&orchid)?;
 
     // Windows registry
     #[cfg(target_os = "windows")]
@@ -191,7 +205,7 @@ fn apply_block_edit_cmd(id: String, block_id: String, new_content: String) -> Re
     let path = find_record_file(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
     let (mut rec, body) = read_record(&path).map_err(|e| e.to_string())?;
     let body = body.unwrap_or_default();
-    let new_body = apply_block_edit(&body, &block_id, &new_content).map_err(|e| e)?;
+    let new_body = apply_block_edit(&body, &block_id, &new_content)?;
     rec.modified = Some(chrono::Utc::now().to_rfc3339());
     write_record(&path, &rec, Some(&new_body)).map_err(|e| e.to_string())?;
     Ok(new_body)
@@ -206,7 +220,10 @@ pub fn run() {
             get_blocks,
             apply_block_edit_cmd,
             records_root_path,
-            register_native_host
+            register_native_host,
+            get_settings,
+            set_registered_folders_cmd,
+            set_records_root_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running Orchard");

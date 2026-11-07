@@ -1,12 +1,13 @@
 # Lilac Extension (MV3)
 
-Thin client for the Lilac record store. Talks to the Rust native host `lilac-host` via native messaging.
+Thin client for the Lilac record store. Talks to Orchard's built-in native host mode over native messaging (no separate `lilac-host.exe`).
 
 ## Try it end-to-end (correct order)
 
-1. Build the host:
+1. Build Orchard:
    ```
-   cargo build -p lilac-host
+   cd apps\orchard\src-tauri
+   cargo build
    ```
 2. Load the extension first (so you get its ID):
    - Chrome: open `chrome://extensions`, enable Developer mode, click "Load unpacked", select this `extension/` folder. Copy the generated extension ID.

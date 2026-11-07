@@ -206,17 +206,13 @@ async function renderSettings() {
   const rr = (cfg && cfg.result && cfg.result.records_root) || "";
   const preview = await getSetting("previewSingle", false);
   const defaultFolder = await getSetting("defaultSaveFolder", "");
-  const cfg = await call("getConfig");
   const registered = (cfg && cfg.result && cfg.result.registered_folders) || [];
   list.innerHTML = `
     <div class="item">
       <div class="title">Settings</div>
       <div class="url">Records root: ${escape(rr)}</div>
       <div class="url">Registered folders: ${registered.length ? registered.map(escape).join(", ") : "(none — using Records/<type>)"}</div>
-      <div class="row" style="margin-top:6px;">
-        <button id="s-addfolder">Add folder</button>
-        <button id="s-clearfolders">Clear folders</button>
-      </div>
+      <div class="url" style="opacity:0.7;">Managed in Orchard Settings (Orchid owns the folder list).</div>
       <div class="row" style="margin-top:6px;">
         <label>Default save folder:
           <select id="s-defaultfolder" style="margin-left:6px;">
@@ -255,22 +251,6 @@ async function renderSettings() {
     setStatus(c.length ? "Conflicts: " + c.map((x) => x.path).join(", ") : "No conflicts");
   });
   const previewCb = $("#s-preview"); if (previewCb) previewCb.addEventListener("change", () => setSetting("previewSingle", previewCb.checked));
-  const addFolderBtn = $("#s-addfolder"); if (addFolderBtn) addFolderBtn.addEventListener("click", async () => {
-    const f = prompt("Folder path (relative to Records/):");
-    if (!f) return;
-    const cfg = await call("getConfig");
-    const cur = (cfg && cfg.result && cfg.result.registered_folders) || [];
-    if (cur.indexOf(f) === -1) cur.push(f);
-    const r = await call("setRegisteredFolders", { folders: cur });
-    if (r && r.ok) { setStatus("Folders updated"); renderSettings(); }
-    else setStatus("Error: " + (r && r.error));
-  });
-  const clearBtn = $("#s-clearfolders"); if (clearBtn) clearBtn.addEventListener("click", async () => {
-    if (!confirm("Clear all registered folders?")) return;
-    const r = await call("setRegisteredFolders", { folders: [] });
-    if (r && r.ok) { setStatus("Cleared"); renderSettings(); }
-    else setStatus("Error: " + (r && r.error));
-  });
   const defSel = $("#s-defaultfolder"); if (defSel) defSel.addEventListener("change", () => setSetting("defaultSaveFolder", defSel.value));
   // naming rule
   const defaultRule = { strip: [" - GitHub", " | Hacker News", " - YouTube"], replace: [], prefix: null, suffix: null, max_len: null };

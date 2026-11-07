@@ -20,6 +20,13 @@ interface Record {
   status: string | null;
 }
 
+interface Settings {
+  records_root: string;
+  config_root: string;
+  registered_folders: string[];
+  extension_id: string;
+}
+
 async function fetchRecords(): Promise<Record[]> {
   return (await invoke("list_records")) as Record[];
 }
@@ -73,6 +80,53 @@ export default function App() {
   const [expanded, setExpanded] = createSignal<string | null>(null);
   const [blocks, setBlocks] = createSignal<Block[]>([]);
   const [iconChoice, setIconChoice] = createSignal(localStorage.getItem("orchard.icon") || "flower");
+  const [settingsOpen, setSettingsOpen] = createSignal(false);
+  const [settings, setSettings] = createSignal<Settings | null>(null);
+  const [rootDraft, setRootDraft] = createSignal("");
+  const [folderDraft, setFolderDraft] = createSignal("");
+  const [extDraft, setExtDraft] = createSignal("");
+  const [settingsMsg, setSettingsMsg] = createSignal("");
+
+  async function refreshSettings() {
+    const s = (await invoke("get_settings")) as Settings;
+    setSettings(s);
+    setRootDraft(s.records_root);
+    setExtDraft(s.extension_id || "");
+  }
+
+  async function openSettings() {
+    setSettingsMsg("");
+    setSettingsOpen(true);
+    await refreshSettings();
+  }
+
+  async function saveFolders(folders: string[]) {
+    await invoke("set_registered_folders_cmd", { folders });
+    await refreshSettings();
+  }
+
+  async function saveRoot() {
+    try {
+      const p = (await invoke("set_records_root_cmd", { path: rootDraft() })) as string;
+      setSettingsMsg("Records root: " + p);
+      await refreshSettings();
+      await load();
+    } catch (e) {
+      setSettingsMsg("Error: " + e);
+    }
+  }
+
+  async function registerHost() {
+    try {
+      const r = (await invoke("register_native_host", {
+        extensionId: extDraft(),
+        hostBinaryPath: null,
+      })) as string;
+      setSettingsMsg(r);
+    } catch (e) {
+      setSettingsMsg("Error: " + e);
+    }
+  }
 
   async function load() {
     const q = query().trim();
@@ -102,14 +156,7 @@ export default function App() {
       <header>
         <span innerHTML={ICONS[iconChoice()]} style={{ "margin-right": "4px" }} />
         <h1>Orchard</h1>
-        <select
-          value={iconChoice()}
-          onChange={(e) => setIconChoice(e.currentTarget.value)}
-          style={{ padding: "4px", "border-radius": "6px", background: "#313244", color: "#cdd6f4", border: "1px solid #45475a" }}
-        >
-          <option value="flower">Flower (top view)</option>
-          <option value="sideways">Flower (side view)</option>
-        </select>
+        <button onClick={() => openSettings()} title="Settings">⚙ Settings</button>
         <input
           type="text"
           placeholder="search (tag:rust, type:page, ...)"
@@ -119,17 +166,110 @@ export default function App() {
         />
         <button onClick={() => load()}>Search</button>
       </header>
-      <div style={{ "margin-bottom": "12px", display: "flex", gap: "8px", "align-items": "center", "flex-wrap": "wrap" }}>
-        <input id="extid" placeholder="Chrome extension ID (for host registration)" style={{ width: "360px", padding: "6px 10px", "border-radius": "6px", border: "1px solid #45475a", background: "#313244", color: "#cdd6f4" }} />
-        <button onClick={async () => {
-          const id = (document.getElementById("extid") as HTMLInputElement)?.value || "";
-          try {
-            const r = await invoke("register_native_host", { extensionId: id, hostBinaryPath: null });
-            alert(r);
-          } catch (e) { alert("Error: " + e); }
-        }}>Register native host</button>
-        <span style={{ "font-size": "12px", color: "#a6adc8" }}>Registers lilac-host for Chrome + Firefox.</span>
-      </div>
+      <Show when={settingsOpen()}>
+        <div
+          style={{
+            position: "fixed", inset: "0", background: "rgba(0,0,0,0.55)",
+            display: "flex", "align-items": "flex-start", "justify-content": "center",
+            "z-index": "100", padding: "48px 16px", overflow: "auto",
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setSettingsOpen(false); }}
+        >
+          <div style={{
+            width: "min(640px, 100%)", background: "#1e1e2e", border: "1px solid #45475a",
+            "border-radius": "12px", padding: "20px", display: "grid", gap: "16px",
+          }}>
+            <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between" }}>
+              <h2 style={{ margin: "0", "font-size": "18px" }}>Settings</h2>
+              <button onClick={() => setSettingsOpen(false)}>Close</button>
+            </div>
+
+            <section>
+              <h3 style={{ "font-size": "13px", "text-transform": "uppercase", color: "#a6adc8", margin: "0 0 6px" }}>Appearance</h3>
+              <label style={{ display: "flex", gap: "8px", "align-items": "center" }}>
+                <span>Icon</span>
+                <select
+                  value={iconChoice()}
+                  onChange={(e) => setIconChoice(e.currentTarget.value)}
+                  style={{ padding: "4px", "border-radius": "6px", background: "#313244", color: "#cdd6f4", border: "1px solid #45475a" }}
+                >
+                  <option value="flower">Flower (top view)</option>
+                  <option value="sideways">Flower (side view)</option>
+                </select>
+              </label>
+            </section>
+
+            <section>
+              <h3 style={{ "font-size": "13px", "text-transform": "uppercase", color: "#a6adc8", margin: "0 0 6px" }}>Storage</h3>
+              <div style={{ display: "flex", gap: "8px", "align-items": "center", "flex-wrap": "wrap" }}>
+                <input
+                  value={rootDraft()}
+                  onInput={(e) => setRootDraft(e.currentTarget.value)}
+                  style={{ flex: "1 1 280px", padding: "6px 10px", "border-radius": "6px", border: "1px solid #45475a", background: "#313244", color: "#cdd6f4" }}
+                />
+                <button onClick={() => saveRoot()}>Save root</button>
+              </div>
+              <div style={{ "font-size": "12px", color: "#a6adc8", "margin-top": "4px" }}>
+                Config: {settings()?.config_root || "…"}
+              </div>
+            </section>
+
+            <section>
+              <h3 style={{ "font-size": "13px", "text-transform": "uppercase", color: "#a6adc8", margin: "0 0 6px" }}>Registered folders</h3>
+              <div style={{ display: "grid", gap: "6px" }}>
+                <For each={settings()?.registered_folders || []}>
+                  {(f) => (
+                    <div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
+                      <code style={{ flex: "1", background: "#313244", padding: "4px 8px", "border-radius": "4px" }}>{f}</code>
+                      <button onClick={() => saveFolders((settings()?.registered_folders || []).filter((x) => x !== f))}>Remove</button>
+                    </div>
+                  )}
+                </For>
+                <Show when={!(settings()?.registered_folders || []).length}>
+                  <div style={{ "font-size": "12px", color: "#a6adc8" }}>
+                    None yet. Lilac saves to <code>Records/&lt;type&gt;</code> until you add folders.
+                  </div>
+                </Show>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <input
+                    value={folderDraft()}
+                    placeholder="e.g. Reading/Articles"
+                    onInput={(e) => setFolderDraft(e.currentTarget.value)}
+                    style={{ flex: "1", padding: "6px 10px", "border-radius": "6px", border: "1px solid #45475a", background: "#313244", color: "#cdd6f4" }}
+                  />
+                  <button onClick={async () => {
+                    const f = folderDraft().trim();
+                    if (!f) return;
+                    const cur = settings()?.registered_folders || [];
+                    if (!cur.includes(f)) await saveFolders([...cur, f]);
+                    setFolderDraft("");
+                  }}>Add</button>
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <h3 style={{ "font-size": "13px", "text-transform": "uppercase", color: "#a6adc8", margin: "0 0 6px" }}>Browser bridge (Lilac)</h3>
+              <div style={{ display: "flex", gap: "8px", "flex-wrap": "wrap" }}>
+                <input
+                  value={extDraft()}
+                  placeholder="Chrome extension ID"
+                  onInput={(e) => setExtDraft(e.currentTarget.value)}
+                  style={{ flex: "1 1 280px", padding: "6px 10px", "border-radius": "6px", border: "1px solid #45475a", background: "#313244", color: "#cdd6f4" }}
+                />
+                <button onClick={() => registerHost()}>Register native host</button>
+              </div>
+              <div style={{ "font-size": "12px", color: "#a6adc8", "margin-top": "4px" }}>
+                Registers this same <code>orchard.exe</code> for Chrome and Firefox.
+              </div>
+            </section>
+
+            <Show when={settingsMsg()}>
+              <div style={{ "font-size": "12px", color: "#a6e3a1", "word-break": "break-word" }}>{settingsMsg()}</div>
+            </Show>
+          </div>
+        </div>
+      </Show>
       <div style={{ display: "grid", gap: "8px", "max-height": "80vh", "overflow": "auto", "margin-top": "12px" }}>
         <For each={records()}>
           {(r) => (

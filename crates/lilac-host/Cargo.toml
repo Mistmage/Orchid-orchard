@@ -7,13 +7,11 @@ authors.workspace = true
 repository.workspace = true
 description = "Lilac native messaging host (browser <-> record store)."
 
+# Library only: Orchard is the single executable and embeds this host runtime
+# (launched by the browser through orchard.exe --host / auto-detection).
 [lib]
 name = "lilac_host"
 path = "src/lib.rs"
-
-[[bin]]
-name = "lilac-host"
-path = "src/main.rs"
 
 [dependencies]
 lilac-core = { path = "../lilac-core" }

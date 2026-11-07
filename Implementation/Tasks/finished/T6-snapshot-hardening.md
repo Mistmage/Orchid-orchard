@@ -5,7 +5,7 @@ status: finished
 related:
   - extension/background.js
   - extension/content.js
-  - crates/lilac-host/src/main.rs
+  - crates/lilac-host/src/lib.rs
 ---
 
 # T6 — Snapshot capture hardening

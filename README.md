@@ -9,7 +9,7 @@ sessions and notes as portable Markdown+YAML records on disk.
 ## Layout
 
 - `crates/lilac-core` — Rust record storage core (model, YAML, atomic I/O, index, search, collection parsing).
-- `crates/lilac-host` — Rust native messaging host (browser ↔ record store).
+- `crates/lilac-host` — shared native-messaging library embedded in orchard.exe (browser ↔ record store).
 - `extension/` — MV3 browser extension (Chrome + Firefox).
 - `docs/` — record format, native host protocol, extension dev, sync.
 - `scripts/` — host install/uninstall (Windows/Linux/macOS).
@@ -20,7 +20,9 @@ sessions and notes as portable Markdown+YAML records on disk.
 ## Build
 
 ```
-cargo build -p lilac-host
+cd apps\orchard\src-tauri
+cargo build
+cd ..\..
 cargo test --workspace
 ```
 

@@ -18,6 +18,8 @@ pub struct OrchidConfig {
     pub version: u32,
     #[serde(default)]
     pub registered_folders: Vec<String>,
+    #[serde(default)]
+    pub extension_id: Option<String>,
 }
 
 impl Default for Config {
@@ -83,9 +85,34 @@ pub fn save_orchid_config(cfg: &OrchidConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// One-time migration from the pre-0.2 location `~/.lilac/`.
+/// Runs only when the new root has no config yet, and never when the root was
+/// overridden via `LILAC_CONFIG_ROOT` (tests must stay isolated).
+fn migrate_legacy(new_root: &Path) {
+    if std::env::var("LILAC_CONFIG_ROOT").is_ok() {
+        return;
+    }
+    let new_cfg = new_root.join("config.yaml");
+    if new_cfg.exists() {
+        return;
+    }
+    let old_root = home_dir().join(".lilac");
+    let old_cfg = old_root.join("config.yaml");
+    if !old_cfg.exists() {
+        return;
+    }
+    let _ = fs::copy(&old_cfg, &new_cfg);
+    let old_rules = old_root.join("rules.txt");
+    let new_rules = new_root.join("rules.txt");
+    if old_rules.exists() && !new_rules.exists() {
+        let _ = fs::copy(old_rules, new_rules);
+    }
+}
+
 pub fn load_config() -> (Config, PathBuf) {
     let root = config_root();
     let _ = fs::create_dir_all(&root);
+    migrate_legacy(&root);
     let path = root.join("config.yaml");
     let mut cfg: Config = if path.exists() {
         fs::read_to_string(&path)

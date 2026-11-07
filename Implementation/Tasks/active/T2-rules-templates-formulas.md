@@ -4,7 +4,7 @@ type: task
 status: active
 related:
   - crates/lilac-core/src/rules.rs
-  - crates/lilac-host/src/main.rs
+  - crates/lilac-host/src/lib.rs
   - extension/popup/popup.js
 ---
 

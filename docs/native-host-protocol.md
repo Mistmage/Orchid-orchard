@@ -3,6 +3,14 @@
 Chrome/Firefox native messaging: host reads 4-byte little-endian length + JSON
 from stdin; writes 4-byte LE length + JSON to stdout.
 
+## Host executable
+
+The host is not a separate binary. The native messaging manifest points at
+`orchard.exe`; `orchard.exe` detects host mode (Chrome/Firefox pass
+`--parent-window` / `-parent-window`, and the browser gives the process stdio
+pipes) and runs the same message loop. `orchard.exe --host` forces host mode
+for manual testing.
+
 ## Envelope
 
 Request:

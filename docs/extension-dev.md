@@ -2,11 +2,14 @@
 
 ## Prerequisites
 
-1. Build the host: `cargo build -p lilac-host`
+1. Build Orchard (single executable: GUI + native messaging host):
+   `cd apps\orchard\src-tauri; cargo build`
 2. Load unpacked extension (Chrome: `chrome://extensions` → Developer mode → Load unpacked → `extension/`).
    Copy the generated extension ID.
-3. Register host: `powershell -File scripts\install-host.ps1 -ExtensionId <id>`
-   (Linux/macOS: `scripts/install-host.sh /path/to/lilac-host <ext_id>`)
+3. Register the host: `powershell -File scripts\install-host.ps1 -ExtensionId <id>`
+   or use Orchard's Settings > Browser bridge. There is no separate
+   `lilac-host.exe`: the browser runs `orchard.exe` and it auto-detects host
+   mode (`--parent-window` / stdio pipes).
 4. Restart browser.
 
 ## Stable extension ID
@@ -27,7 +30,7 @@ Firefox uses the fixed id `lilac@orchid` (`browser_specific_settings.gecko.id`).
 
 ## Adding a new host method
 
-1. Add a branch in `dispatch` in `crates/lilac-host/src/main.rs`.
+1. Add a branch in `dispatch` in `crates/lilac-host/src/lib.rs`.
 2. Add a message type in `background.js`.
 3. Wire into popup if needed.
 4. Update `docs/native-host-protocol.md`.
