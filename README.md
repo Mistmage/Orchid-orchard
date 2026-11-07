@@ -3,42 +3,188 @@
 A local-first personal knowledge/workspace OS built on one recursive idea:
 **everything is a record/block, and views are projections** over a shared store.
 
-Lilac is the first brick: a cross-browser extension that stores tabs, bookmarks,
-sessions and notes as portable Markdown+YAML records on disk.
+Orchard is the desktop app (Tauri 2 + SolidJS). Lilac is the browser extension
+that turns tabs, bookmarks, sessions and notes into the same portable
+Markdown + YAML records on disk.
 
-## Layout
+## What is here
 
-- `crates/lilac-core` — Rust record storage core (model, YAML, atomic I/O, index, search, collection parsing).
-- `crates/lilac-host` — shared native-messaging library embedded in orchard.exe (browser ↔ record store).
-- `extension/` — MV3 browser extension (Chrome + Firefox).
-- `docs/` — record format, native host protocol, extension dev, sync.
-- `scripts/` — host install/uninstall (Windows/Linux/macOS).
-- `templates/` — `.gitignore` template for a records root.
-- `Lilac plan/` — design notes and phase plans.
-- `Orchid project.md` — umbrella vision.
+| Path | What it is |
+| --- | --- |
+| `apps/orchard` | Orchard desktop app: SolidJS frontend + Tauri/Rust shell. |
+| `crates/lilac-core` | Rust record storage core: records, YAML, atomic I/O, index, search, block model, block type registry, naming, rules, WAL. |
+| `crates/lilac-host` | Shared native-messaging library, embedded in `orchard.exe`. |
+| `extension/` | MV3 browser extension (Chrome + Firefox). |
+| `docs/` | Record format, host protocol, development notes, sync. |
+| `scripts/` | Host install/uninstall, release build. |
+| `templates/` | `.gitignore` template for a records root. |
+| `Implementation/` | Task, goal, design and fact notes (see its `README.md` legend). |
 
-## Build
+## Requirements
 
+- Rust stable (MSVC target on Windows).
+- Node 20+ and npm.
+- WebView2 runtime (installed by default on current Windows).
+
+## Build and run
+
+Development app:
+
+```powershell
+cd apps\orchard
+npm install
+npm run tauri dev
 ```
-cd apps\orchard\src-tauri
+
+Plain debug build (frontend must already be built):
+
+```powershell
+cd apps\orchard
+npm run build
+cd src-tauri
 cargo build
-cd ..\..
+```
+
+Core tests:
+
+```powershell
 cargo test --workspace
 ```
 
-## Try it
+Release artifacts (frontend + release build + extension zip):
 
-See `extension/README.md` for the end-to-end steps (build → load unpacked →
-register host → restart browser).
+```powershell
+powershell -File scripts\build-release.ps1
+```
+
+Outputs:
+
+- `dist\orchard.exe` - the single desktop executable.
+- `dist\lilac-extension.zip` - the browser extension.
+
+`dist/` is generated and gitignored.
+
+## Single executable
+
+`orchard.exe` is both the GUI and the native-messaging host. There is no
+separate `lilac-host.exe`. When a browser launches it, host mode is detected
+from `apps/orchard/src-tauri/src/main.rs`:
+
+- `--host` (explicit),
+- `--parent-window...` / `-parent-window...` (Chrome / Firefox),
+- stdin and stdout are both pipes (launchers that pass no arguments).
+
+## Register the browser host
+
+After building, register the executable with Chrome/Firefox:
+
+```powershell
+powershell -File scripts\install-host.ps1 `
+  -ExtensionId "<chrome-extension-id>" `
+  -BinaryPath "dist\orchard.exe" `
+  -RecordsRoot "C:\Users\<you>\Documents\Lilac"
+```
+
+This writes `%LOCALAPPDATA%\Lilac\lilac_host.json`, registers the Chrome and
+Firefox native-messaging keys, and stores the records root in
+`~/.orchard/.lilac/config.yaml`. Restart the browser, then load the extension
+from `extension/`.
+
+If the extension ID changes, re-run the script; otherwise the manifest's
+`allowed_origins` will reject the host.
+
+## Configuration
+
+Both the GUI and the host load the same config, so there is one source of
+truth:
+
+- `~/.orchard/.lilac/config.yaml` - records root and registered folders.
+- `~/.orchard/.orchid/config.yaml` - Orchard app settings (registered folders,
+  extension id).
+- Legacy `~/.lilac/config.yaml` is migrated once on first load.
+
+The GUI's Settings dialog edits these values and shows the live block type
+registry.
+
+## Records
+
+A record is a Markdown file with YAML frontmatter:
+
+```markdown
+---
+id: rec_1793141421839
+type: article
+title: How we built a local-first knowledge space
+tags: [tauri, markdown]
+status: unread
+url: https://example.com/article
+---
+
+# Notes
+
+Body text. Unknown frontmatter keys are preserved on write.
+```
+
+Files are the database. The index is a cache and can always be rebuilt from
+disk. Records never store browser `window_id`/`tab_id`; browser data is only a
+hint used to propose placement.
+
+## Block type system
+
+Block structure is declared, not hardcoded. The registry lives in
+`crates/lilac-core/src/block_types.rs`; each type declares:
+
+- `syntax` - how it is recognised,
+- `nesting` - its hierarchy rank (`Root`, `Section(rank)`, `Heading`, `Leaf`),
+- `id` - eager slug, fixed id, or lazy,
+- `metadata` - declared fields for diagnostics and future tooling.
+
+Default ranks:
+
+| Type | Syntax | Rank |
+| --- | --- | --- |
+| frontmatter | leading `---` YAML mapping | root |
+| divider | `---` | 10 |
+| subdivider | `***` / `___` | 20 |
+| heading | `#` ... `######` | 30, 40, ... 80 |
+| leaf blocks | paragraphs, lists, code, tables, quotes, callouts, math, HTML, images | 255 |
+
+A section with a higher rank nests under the nearest open section with a lower
+rank; an equal or lower rank closes it. Leaves attach to the innermost open
+section. This makes `--- *** *** ---` a top-level divider containing two
+sub-dividers, not five equal rules.
+
+The parser and tree builder ask the registry; they contain no per-type
+hierarchy branches. `validate_registry()` checks the invariants (unique names,
+unique section ranks, one root type, a paragraph fallback, heading ranks inside
+range), and `validate_tree()` checks every parsed tree. Adding a block type is
+one registry entry plus its `BlockKind` mapping, and hierarchy mistakes fail
+loudly instead of producing a subtly wrong tree.
+
+The Settings dialog lists every registered type with rank, nesting and id
+policy, and reports `N registered · registry valid`.
+
+See `Implementation/Markdown/Design/block-type-system.md` for the design and
+extension steps.
 
 ## Principles
 
 - Files are the database; indexes are caches.
-- Browsers are clients; no browser is authoritative.
+- Rust owns document structure and logic; the frontend is a thin renderer.
 - Metadata is open; arbitrary user keys survive round-trips.
+- Browsers are clients; no browser is authoritative.
 - Cross-browser: records never store `window_id`/`tab_id`.
-- Conflict philosophy: a conflicted file is preferable to a hidden merge.
 - Local-first: no telemetry; all data lives in portable files.
+- Conflict philosophy: a conflicted file is preferable to a hidden merge.
+- Build for debuggability and extension, even when it costs more code.
+
+## More documentation
+
+- `docs/orchard-dev.md` - development, commands, host mode.
+- `docs/record-format.md` - record/frontmatter format.
+- `docs/native-host-protocol.md` - browser host messages.
+- `extension/README.md` - extension install and use.
+- `Implementation/README.md` - note conventions and legend.
 
 ## License
 

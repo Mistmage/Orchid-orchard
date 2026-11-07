@@ -27,6 +27,21 @@ interface Settings {
   extension_id: string;
 }
 
+interface BlockTypeInfo {
+  name: string;
+  title: string;
+  syntax: string;
+  nesting: string;
+  rank: number;
+  id: string;
+  metadata: { name: string; kind: string; required: boolean }[];
+}
+
+interface BlockTypeReport {
+  types: BlockTypeInfo[];
+  valid: boolean;
+}
+
 async function fetchRecords(): Promise<Record[]> {
   return (await invoke("list_records")) as Record[];
 }
@@ -41,9 +56,49 @@ async function applyBlockEdit(id: string, blockId: string, content: string) {
 }
 
 function kindLabel(kind: any): string {
-  if (kind && typeof kind === "object" && kind.Heading) return "H" + kind.Heading.level;
-  if (typeof kind === "string") return kind;
+  if (typeof kind === "string") {
+    const names: Record<string, string> = {
+      Frontmatter: "frontmatter",
+      Paragraph: "paragraph",
+      Quote: "quote",
+      Callout: "callout",
+      Table: "table",
+      Math: "math",
+      Html: "html",
+      Image: "image",
+    };
+    return names[kind] || kind.toLowerCase();
+  }
+  if (kind && kind.Heading) return "H" + kind.Heading.level;
+  if (kind && kind.Divider) return kind.Divider.rank >= 20 ? "***" : "---";
+  if (kind && kind.CodeBlock) return "code" + (kind.CodeBlock.lang ? "(" + kind.CodeBlock.lang + ")" : "");
+  if (kind && kind.ListItem) return "list";
+  if (kind && kind.Custom) return "custom:" + kind.Custom.name;
   return "block";
+}
+
+function kindRank(kind: any): number {
+  if (kind && kind.Heading) return 30 + kind.Heading.level - 1;
+  if (kind && kind.Divider) return kind.Divider.rank;
+  return 255;
+}
+
+function BlockNode(props: { b: Block; recordId: string; depth: number }) {
+  return (
+    <div style={{ "margin-left": props.depth ? "14px" : "0", "margin-bottom": "6px" }}>
+      <div style={{ "font-size": "11px", color: "#a6adc8", "margin-bottom": "2px" }}>
+        <b>{kindLabel(props.b.kind)}</b>
+        <span style={{ "margin-left": "6px", opacity: 0.7 }}>rank {kindRank(props.b.kind)}</span>
+      </div>
+      <CodeMirrorBlock
+        initial={props.b.content || ""}
+        onSave={(v) => applyBlockEdit(props.recordId, props.b.id!, v).catch(() => {})}
+      />
+      <For each={props.b.children}>
+        {(c) => <BlockNode b={c} recordId={props.recordId} depth={props.depth + 1} />}
+      </For>
+    </div>
+  );
 }
 
 function CodeMirrorBlock(props: { initial: string; onSave: (v: string) => void }) {
@@ -86,12 +141,15 @@ export default function App() {
   const [folderDraft, setFolderDraft] = createSignal("");
   const [extDraft, setExtDraft] = createSignal("");
   const [settingsMsg, setSettingsMsg] = createSignal("");
+  const [blockTypes, setBlockTypes] = createSignal<BlockTypeReport | null>(null);
 
   async function refreshSettings() {
     const s = (await invoke("get_settings")) as Settings;
     setSettings(s);
     setRootDraft(s.records_root);
     setExtDraft(s.extension_id || "");
+    const bt = (await invoke("get_block_types")) as BlockTypeReport;
+    setBlockTypes(bt);
   }
 
   async function openSettings() {
@@ -264,6 +322,28 @@ export default function App() {
               </div>
             </section>
 
+            <section>
+              <h3 style={{ "font-size": "13px", "text-transform": "uppercase", color: "#a6adc8", margin: "0 0 6px" }}>Block types</h3>
+              <div style={{ "font-size": "12px", "margin-bottom": "6px", color: blockTypes()?.valid ? "#a6e3a1" : "#f38ba8" }}>
+                {blockTypes() ? `${blockTypes()!.types.length} registered · registry ${blockTypes()!.valid ? "valid" : "INVALID"}` : "…"}
+              </div>
+              <div style={{ display: "grid", gap: "3px", "max-height": "180px", overflow: "auto" }}>
+                <For each={blockTypes()?.types || []}>
+                  {(t) => (
+                    <div
+                      title={t.metadata.length ? "metadata: " + t.metadata.map((m) => m.name + ":" + m.kind + (m.required ? "!" : "")).join(", ") : "no metadata fields"}
+                      style={{ display: "flex", gap: "8px", "font-size": "12px", "font-family": "monospace" }}
+                    >
+                      <span style={{ width: "110px" }}>{t.name}</span>
+                      <span style={{ width: "60px", opacity: 0.8 }}>r{t.rank}</span>
+                      <span style={{ flex: "1", opacity: 0.7 }}>{t.nesting}</span>
+                      <span style={{ opacity: 0.55 }}>{t.id}</span>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </section>
+
             <Show when={settingsMsg()}>
               <div style={{ "font-size": "12px", color: "#a6e3a1", "word-break": "break-word" }}>{settingsMsg()}</div>
             </Show>
@@ -280,15 +360,7 @@ export default function App() {
               <Show when={expanded() === r.id}>
                 <div class="blocks" style={{ "margin-top": "8px" }}>
                   <For each={blocks()}>
-                    {(b) => (
-                      <div style={{ "margin-bottom": "6px" }}>
-                        <b>{kindLabel(b.kind)}</b>
-                        <CodeMirrorBlock
-                          initial={b.content || ""}
-                          onSave={(v) => applyBlockEdit(r.id, b.id!, v).catch(() => {})}
-                        />
-                      </div>
-                    )}
+                    {(b) => <BlockNode b={b} recordId={r.id} depth={0} />}
                   </For>
                 </div>
               </Show>

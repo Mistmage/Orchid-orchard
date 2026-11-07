@@ -1,6 +1,7 @@
 //! Lilac record storage core.
 
 pub mod block;
+pub mod block_types;
 pub mod collection;
 pub mod editor;
 pub mod error;
@@ -12,7 +13,12 @@ pub mod wal;
 
 pub use block::{
     Block, BlockKind, apply_block_edit, apply_block_edits, block_hash, find_block, parse_blocks,
-    reconcile_blocks, reconcile_text, splice_block,
+    reconcile_blocks, reconcile_text, splice_block, validate_tree,
+};
+pub use block_types::{
+    BLOCK_TYPES, BlockTypeDef, IdPolicy, MetaField, MetaKind, Nesting, Syntax, classify_line,
+    describe as describe_block_types, registry as block_type_registry,
+    validate_registry as validate_block_registry,
 };
 pub use collection::{CollectionItem, parse_collection_body, render_collection_body};
 pub use editor::BlockEditor;

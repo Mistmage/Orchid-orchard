@@ -19,13 +19,16 @@ Legend for implementation notes, tools, future work, tasks, and goals.
 - `Process/Review/` - audits and process notes (what was claimed vs. what
   actually shipped).
 - Topic folders (`Markdown/`, `Config/`, `Obsidian/`, ...) - notes about a
-  subject, with state subfolders (`Fact/`, `Change/`, `Parity/`, ...).
+  subject, with state subfolders (`Fact/`, `Change/`, `Design/`, `Parity/`,
+  ...).
+- `Markdown/Design/` - how a system is built and why; extension points and
+  invariants.
 
 ## Convention
 
 Every note in this folder uses YAML frontmatter with at least:
 - `topic`: short topic name
-- `type`: note | tool | future | legend | task | goal | goal-current | goal-intermediary | goal-final
+- `type`: note | tool | future | legend | task | goal | goal-current | goal-intermediary | goal-final | fact | design | parity
 - `status`: active | planned | deferred | finished | reached | cancelled
 
 Related notes link via `related:` list of paths, relative to the note's own

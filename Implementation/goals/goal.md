@@ -13,7 +13,7 @@ related:
   - ../Tasks/active/T2-rules-templates-formulas.md
   - ../Tasks/active/T3-tab-groups-windows.md
   - ../Tasks/active/T7-naming-rules-ui.md
-  - ../Tasks/deferred/T8-ranked-dividers.md
+  - ../Tasks/active/T8-block-type-system.md
 ---
 
 # Goal (organiser)
@@ -33,7 +33,7 @@ Wayfinder approach, but note-based (no GitHub).
 ### M3 — Block storage + editor (current)
 - Current: `Current/block-storage-surgery.md`
 - Current: `Current/solidjs-components-polish.md`
-- Tasks: T1, T2, T3, T7 (active), T8 (deferred)
+- Tasks: T1, T2, T3, T7, T8 (active)
 
 ### M-final — Lilac v1
 - Final: `final/lilac-v1.md`

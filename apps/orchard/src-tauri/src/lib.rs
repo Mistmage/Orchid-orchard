@@ -85,6 +85,11 @@ fn find_record_file(dir: &std::path::Path, id: &str) -> Option<PathBuf> {
 }
 
 #[tauri::command]
+fn get_block_types() -> serde_json::Value {
+    lilac_core::block_types::describe()
+}
+
+#[tauri::command]
 fn records_root_path() -> String {
     records_root().to_string_lossy().to_string()
 }
@@ -221,6 +226,7 @@ pub fn run() {
             apply_block_edit_cmd,
             records_root_path,
             register_native_host,
+            get_block_types,
             get_settings,
             set_registered_folders_cmd,
             set_records_root_cmd

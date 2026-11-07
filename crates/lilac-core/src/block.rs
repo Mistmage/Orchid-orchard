@@ -3,24 +3,94 @@
 //! Rust is the sole authority for document structure: parsing, block identity,
 //! byte spans, and hierarchy all live here. The frontend only renders.
 //!
+//! Block types are declared in [`crate::block_types`]. This module only:
+//! 1. recognises lines through the registry,
+//! 2. extracts a flat sequence of blocks with byte spans, and
+//! 3. nests them using each type's declared [`Nesting`].
+//!
+//! There is no per-type branching in the tree builder, so adding a block type
+//! cannot introduce a hierarchy bug: the type declares its rank once and the
+//! same generic algorithm applies.
+//!
 //! Block identity is type-aware:
-//!     - Headings get an id eagerly (slug of their text).
-//!     - YAML frontmatter gets an id eagerly ("frontmatter").
-//!     - Other blocks are lazy (None) unless explicitly referenced.
+//! - Headings get an id eagerly (slug of their text, deduplicated).
+//! - YAML frontmatter gets the fixed id `frontmatter`.
+//! - Other blocks are lazy (None) unless explicitly referenced.
+//!
 //! Content hash is the universal fallback for dedup/change detection.
 
 use std::collections::HashMap;
+
+use crate::block_types::{
+    self, BlockTypeDef, IdPolicy, MetaField, Nesting, RANK_DIVIDER, RANK_SUBDIVIDER,
+    classify_line, fence_marker, heading_level, list_marker, starts_new_block,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BlockKind {
     Frontmatter,
     Heading { level: u8 },
+    /// `---` (rank [`RANK_DIVIDER`]) or `***`/`___` (rank [`RANK_SUBDIVIDER`]).
+    Divider { rank: u8 },
     Paragraph,
     CodeBlock { lang: Option<String> },
     ListItem { indent: usize },
-    HorizontalRule,
-    Blockquote,
-    Other,
+    Quote,
+    Callout,
+    Table,
+    Math,
+    Html,
+    Image,
+    /// Escape hatch for user-defined block types; always a leaf.
+    Custom { name: String },
+}
+
+impl BlockKind {
+    /// Registry key.
+    pub fn type_name(&self) -> &str {
+        match self {
+            BlockKind::Frontmatter => "frontmatter",
+            BlockKind::Heading { .. } => "heading",
+            BlockKind::Divider { rank } if *rank == RANK_DIVIDER => "divider",
+            BlockKind::Divider { .. } => "subdivider",
+            BlockKind::Paragraph => "paragraph",
+            BlockKind::CodeBlock { .. } => "code",
+            BlockKind::ListItem { .. } => "list",
+            BlockKind::Quote => "quote",
+            BlockKind::Callout => "callout",
+            BlockKind::Table => "table",
+            BlockKind::Math => "math",
+            BlockKind::Html => "html",
+            BlockKind::Image => "image",
+            BlockKind::Custom { name } => name,
+        }
+    }
+
+    pub fn def(&self) -> Option<&'static BlockTypeDef> {
+        block_types::by_name(self.type_name())
+    }
+
+    /// Declared nesting, falling back to `Leaf` for unknown custom types.
+    pub fn nesting(&self) -> Nesting {
+        self.def().map(|d| d.nesting).unwrap_or(Nesting::Leaf)
+    }
+
+    pub fn id_policy(&self) -> IdPolicy {
+        self.def().map(|d| d.id).unwrap_or(IdPolicy::Lazy)
+    }
+
+    pub fn metadata_fields(&self) -> &'static [MetaField] {
+        self.def().map(|d| d.metadata).unwrap_or(&[])
+    }
+
+    /// Effective hierarchy rank for this block.
+    pub fn rank(&self) -> u8 {
+        let level = match self {
+            BlockKind::Heading { level } => *level,
+            _ => 0,
+        };
+        self.nesting().rank(level)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -44,7 +114,13 @@ struct FlatBlock {
 /// Parse grape markdown into a block tree.
 pub fn parse_blocks(text: &str) -> Vec<Block> {
     let flat = parse_flat(text);
-    build_tree(flat)
+    let tree = build_tree(flat);
+    debug_assert!(
+        validate_tree(&tree).is_ok(),
+        "hierarchy invariant violated: {:?}",
+        validate_tree(&tree)
+    );
+    tree
 }
 
 /// Find a block by id (depth-first).
@@ -158,49 +234,61 @@ fn reconcile_one(
     } else if let Some(id) = &block.id {
         let _ = hash_by_id.get(id);
     }
+
     for c in block.children.iter_mut() {
         reconcile_one(c, id_by_hash, hash_by_id);
     }
 }
 
+// ---------------------------------------------------------------------------
+// Parsing
+// ---------------------------------------------------------------------------
+
 fn parse_flat(text: &str) -> Vec<FlatBlock> {
     let mut out = Vec::new();
-    let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    // First, handle YAML frontmatter if present.
-    if text.starts_with("---") {
-        let mut end_byte = 0;
-        let mut byte = 0;
-        let mut found_close = false;
-        let mut close_line_idx = 0;
-        for (idx, line) in lines.iter().enumerate() {
-            if idx == 0 {
-                byte += line.len();
-                continue;
-            }
-            if line.trim() == "---\n" || line.trim() == "---" {
-                found_close = true;
-                close_line_idx = idx;
-                byte += line.len();
-                end_byte = byte;
-                break;
-            }
-            byte += line.len();
-        }
-        if found_close {
-            let fm_content: String = lines[1..close_line_idx].concat();
-            out.push(FlatBlock {
-                id: Some("frontmatter".to_string()),
-                kind: BlockKind::Frontmatter,
-                content: fm_content.trim_end_matches('\n').to_string(),
-                span: (0, end_byte),
-            });
-            let rest_text = &text[end_byte..];
-            out.extend(parse_flat_rest(rest_text, end_byte));
-            return out;
-        }
+    let mut rest_start = 0;
+
+    if let Some((end, fm_content)) = split_frontmatter(text) {
+        out.push(FlatBlock {
+            id: Some("frontmatter".to_string()),
+            kind: BlockKind::Frontmatter,
+            content: fm_content,
+            span: (0, end),
+        });
+        rest_start = end;
     }
-    out.extend(parse_flat_rest(text, 0));
+
+    out.extend(parse_flat_rest(&text[rest_start..], rest_start));
+    assign_ids(&mut out);
     out
+}
+
+/// YAML frontmatter is `---` on line 1, a closing `---`, and a non-empty YAML
+/// mapping in between. Requiring a mapping prevents a plain thematic break
+/// (`--- *** *** ---`) from being mistaken for metadata.
+fn split_frontmatter(text: &str) -> Option<(usize, String)> {
+    let mut lines = text.split_inclusive('\n');
+    let first = lines.next()?;
+    if first.trim_end_matches(['\r', '\n']).trim() != "---" {
+        return None;
+    }
+
+    let mut offset = first.len();
+    let mut fm = String::new();
+    for line in lines {
+        let trimmed = line.trim_end_matches(['\r', '\n']).trim();
+        if trimmed == "---" {
+            let end = offset + line.len();
+            let looks_like_mapping = matches!(
+                serde_yaml::from_str::<serde_yaml::Value>(&fm),
+                Ok(serde_yaml::Value::Mapping(ref m)) if !m.is_empty()
+            );
+            return if looks_like_mapping { Some((end, fm)) } else { None };
+        }
+        fm.push_str(line);
+        offset += line.len();
+    }
+    None
 }
 
 fn parse_flat_rest(text: &str, base_offset: usize) -> Vec<FlatBlock> {
@@ -211,57 +299,144 @@ fn parse_flat_rest(text: &str, base_offset: usize) -> Vec<FlatBlock> {
         lines.push((off, line));
         off += line.len();
     }
+
     let mut i = 0;
     while i < lines.len() {
         if lines[i].1.trim().is_empty() {
             i += 1;
             continue;
         }
-        let start = lines[i].0;
-        let mut j = i;
-        let mut content = String::new();
-        while j < lines.len() && !lines[j].1.trim().is_empty() {
-            content.push_str(lines[j].1);
-            j += 1;
+
+        // Fenced blocks (code/math) consume blank lines until their closing
+        // marker; they are never split by the structural-line rule.
+        if let Some(marker) = closing_marker(lines[i].1) {
+            let mut j = i + 1;
+            while j < lines.len() {
+                let t = lines[j].1.trim();
+                let closes = if marker == "$$" {
+                    t == "$$"
+                } else {
+                    t.starts_with(marker)
+                };
+                j += 1;
+                if closes {
+                    break;
+                }
+            }
+            push_range(&mut out, &lines, i, j);
+            i = j;
+            continue;
         }
-        let end = lines[j - 1].0 + lines[j - 1].1.len();
-        let trimmed = content.trim_end_matches('\n').to_string();
-        let kind = classify_block(&trimmed);
-        let id = match &kind {
-            BlockKind::Heading { .. } => Some(slug_id(&trimmed)),
-            _ => None,
-        };
-        out.push(FlatBlock {
-            id,
-            kind,
-            content: trimmed,
-            span: (start, end),
-        });
+
+        let def = classify_line(lines[i].1);
+        let mut j = i + 1;
+        if def.nesting.is_section() {
+            // Headings/dividers own exactly their own line; following content
+            // becomes their children.
+        } else {
+            while j < lines.len()
+                && !lines[j].1.trim().is_empty()
+                && !starts_new_block(lines[j].1)
+            {
+                j += 1;
+            }
+        }
+        push_range(&mut out, &lines, i, j);
         i = j;
     }
     out
 }
 
+fn closing_marker(line: &str) -> Option<&str> {
+    if let Some(m) = fence_marker(line) {
+        return Some(m);
+    }
+    if line.trim() == "$$" {
+        return Some("$$");
+    }
+    None
+}
+
+fn push_range(out: &mut Vec<FlatBlock>, lines: &[(usize, &str)], i: usize, j: usize) {
+    let start = lines[i].0;
+    let end = lines[j - 1].0 + lines[j - 1].1.len();
+    let mut content = String::new();
+    for (_, line) in &lines[i..j] {
+        content.push_str(line);
+    }
+    let content = content.trim_end_matches('\n').to_string();
+    let kind = classify_block(&content);
+    out.push(FlatBlock {
+        id: None,
+        kind,
+        content,
+        span: (start, end),
+    });
+}
+
 fn classify_block(content: &str) -> BlockKind {
     let first = content.lines().next().unwrap_or("").trim();
-    if first.starts_with("# ") {
-        BlockKind::Heading { level: 1 }
-    } else if first.starts_with("## ") {
-        BlockKind::Heading { level: 2 }
-    } else if first.starts_with("### ") {
-        BlockKind::Heading { level: 3 }
-    } else if first.starts_with("#### ") {
-        BlockKind::Heading { level: 4 }
-    } else if first.starts_with("```") {
-        BlockKind::CodeBlock { lang: None }
-    } else if first == "---" || first == "***" || first == "___" {
-        BlockKind::HorizontalRule
-    } else if first.starts_with("> ") || first.starts_with(">") {
-        BlockKind::Blockquote
-    } else if first.starts_with("- ") || first.starts_with("* ") || first.starts_with("+ ") {
-        BlockKind::ListItem { indent: 0 }
+    let def = classify_line(first);
+    match def.syntax {
+        block_types::Syntax::Frontmatter => BlockKind::Frontmatter,
+        block_types::Syntax::Heading => BlockKind::Heading {
+            level: heading_level(first).unwrap_or(1),
+        },
+        block_types::Syntax::ThematicBreak => BlockKind::Divider {
+            rank: RANK_DIVIDER,
+        },
+        block_types::Syntax::SubDivider => BlockKind::Divider {
+            rank: RANK_SUBDIVIDER,
+        },
+        block_types::Syntax::Fence => BlockKind::CodeBlock {
+            lang: fence_lang(first),
+        },
+        block_types::Syntax::Callout => BlockKind::Callout,
+        block_types::Syntax::Quote => BlockKind::Quote,
+        block_types::Syntax::List => BlockKind::ListItem {
+            indent: list_marker(first).unwrap_or(0),
+        },
+        block_types::Syntax::Table => BlockKind::Table,
+        block_types::Syntax::Math => BlockKind::Math,
+        block_types::Syntax::Html => BlockKind::Html,
+        block_types::Syntax::Image => BlockKind::Image,
+        block_types::Syntax::Paragraph => BlockKind::Paragraph,
+        block_types::Syntax::Custom => BlockKind::Custom {
+            name: def.name.to_string(),
+        },
+    }
+}
+
+fn fence_lang(line: &str) -> Option<String> {
+    let t = line.trim_start();
+    let rest = t
+        .strip_prefix("```")
+        .or_else(|| t.strip_prefix("~~~"))?
+        .trim();
+    if rest.is_empty() {
+        None
     } else {
-        BlockKind::Paragraph
+        Some(rest.split_whitespace().next().unwrap_or(rest).to_string())
+    }
+}
+
+fn assign_ids(flat: &mut [FlatBlock]) {
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for fb in flat {
+        fb.id = match fb.kind.id_policy() {
+            IdPolicy::EagerFixed(id) => Some(id.to_string()),
+            IdPolicy::EagerSlug => {
+                let base = slug_id(&fb.content);
+                let count = seen.entry(base.clone()).or_insert(0);
+                *count += 1;
+                Some(if *count == 1 {
+                    base
+                } else {
+                    format!("{}-{}", base, count)
+                })
+            }
+            IdPolicy::Lazy | IdPolicy::ContentHash => None,
+        };
     }
 }
 
@@ -284,13 +459,12 @@ fn slug_id(text: &str) -> String {
 }
 
 fn build_tree(flat: Vec<FlatBlock>) -> Vec<Block> {
-    let mut root_children: Vec<Block> = Vec::new();
+    let mut roots: Vec<Block> = Vec::new();
     let mut stack: Vec<(u8, Block)> = Vec::new();
+
     for fb in flat {
-        let level = match &fb.kind {
-            BlockKind::Heading { level } => *level,
-            _ => 0,
-        };
+        let nesting = fb.kind.nesting();
+        let rank = fb.kind.rank();
         let block = Block {
             id: fb.id,
             kind: fb.kind,
@@ -298,39 +472,100 @@ fn build_tree(flat: Vec<FlatBlock>) -> Vec<Block> {
             span: fb.span,
             children: Vec::new(),
         };
-        if level > 0 {
-            while let Some((lvl, _)) = stack.last() {
-                if *lvl >= level {
-                    let (_, finished) = stack.pop().unwrap();
-                    if let Some((_, parent)) = stack.last_mut() {
-                        parent.children.push(finished);
-                    } else {
-                        root_children.push(finished);
-                    }
+
+        match nesting {
+            Nesting::Root => {
+                flush_all(&mut stack, &mut roots);
+                roots.push(block);
+            }
+            Nesting::Section(_) | Nesting::Heading { .. } => {
+                flush_while(&mut stack, &mut roots, rank);
+                stack.push((rank, block));
+            }
+            Nesting::Leaf => {
+                if let Some((_, parent)) = stack.last_mut() {
+                    parent.children.push(block);
                 } else {
-                    break;
+                    roots.push(block);
                 }
             }
-            stack.push((level, block));
-        } else if let Some((_, top)) = stack.last_mut() {
-            top.children.push(block);
-        } else {
-            root_children.push(block);
         }
     }
+
+    flush_all(&mut stack, &mut roots);
+    roots
+}
+
+fn flush_while(stack: &mut Vec<(u8, Block)>, roots: &mut Vec<Block>, rank: u8) {
+    while let Some((top_rank, _)) = stack.last() {
+        if *top_rank >= rank {
+            let (_, finished) = stack.pop().expect("checked above");
+            if let Some((_, parent)) = stack.last_mut() {
+                parent.children.push(finished);
+            } else {
+                roots.push(finished);
+            }
+        } else {
+            break;
+        }
+    }
+}
+
+fn flush_all(stack: &mut Vec<(u8, Block)>, roots: &mut Vec<Block>) {
     while let Some((_, finished)) = stack.pop() {
         if let Some((_, parent)) = stack.last_mut() {
             parent.children.push(finished);
         } else {
-            root_children.push(finished);
+            roots.push(finished);
         }
     }
-    root_children
+}
+
+/// Structural invariants of a parsed tree. Used in debug builds and tests, and
+/// exposed so tools can validate external/imported trees.
+pub fn validate_tree(blocks: &[Block]) -> Result<(), Vec<String>> {
+    let mut errors = Vec::new();
+    for b in blocks {
+        validate_block(b, None, &mut errors);
+    }
+    if errors.is_empty() { Ok(()) } else { Err(errors) }
+}
+
+fn validate_block(block: &Block, parent_rank: Option<u8>, errors: &mut Vec<String>) {
+    let nesting = block.kind.nesting();
+    if nesting == Nesting::Leaf && !block.children.is_empty() {
+        errors.push(format!(
+            "leaf block {:?} has {} children",
+            block.kind,
+            block.children.len()
+        ));
+    }
+    if let Some(pr) = parent_rank
+        && nesting.is_section()
+        && block.kind.rank() <= pr
+    {
+        errors.push(format!(
+            "section {:?} (rank {}) is not deeper than its parent (rank {})",
+            block.kind,
+            block.kind.rank(),
+            pr
+        ));
+    }
+    if nesting.is_section() {
+        for c in &block.children {
+            validate_block(c, Some(block.kind.rank()), errors);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registry_is_valid() {
+        block_types::validate_registry().expect("registry invariants");
+    }
 
     #[test]
     fn heading_gets_id() {
@@ -342,6 +577,22 @@ mod tests {
         }
         assert_eq!(blocks[0].id.as_deref(), Some("hello-world"));
         assert_eq!(blocks[0].children.len(), 1);
+    }
+
+    #[test]
+    fn duplicate_headings_get_unique_ids() {
+        let blocks = parse_blocks("# Same\n\n## Same\n\n# Same\n");
+        let mut ids = Vec::new();
+        fn collect(bs: &[Block], ids: &mut Vec<String>) {
+            for b in bs {
+                if let Some(id) = &b.id {
+                    ids.push(id.clone());
+                }
+                collect(&b.children, ids);
+            }
+        }
+        collect(&blocks, &mut ids);
+        assert_eq!(ids, vec!["same", "same-2", "same-3"]);
     }
 
     #[test]
@@ -359,11 +610,67 @@ mod tests {
     }
 
     #[test]
+    fn divider_run_is_not_frontmatter() {
+        let blocks = parse_blocks("---\n***\n***\n---\n");
+        assert!(
+            matches!(blocks[0].kind, BlockKind::Divider { rank: RANK_DIVIDER }),
+            "first block should be a divider, got {:?}",
+            blocks[0].kind
+        );
+        assert!(
+            !blocks
+                .iter()
+                .any(|b| matches!(b.kind, BlockKind::Frontmatter)),
+            "a thematic-break run must not be mistaken for YAML"
+        );
+    }
+
+    #[test]
+    fn ranked_divider_nesting() {
+        // --- opens a top section; *** is one rank lower and splits it.
+        let blocks = parse_blocks("---\n***\n***\n---\n");
+        assert_eq!(
+            blocks[0].kind,
+            BlockKind::Divider { rank: RANK_DIVIDER }
+        );
+        assert_eq!(blocks[0].children.len(), 2);
+        for c in &blocks[0].children {
+            assert_eq!(c.kind, BlockKind::Divider { rank: RANK_SUBDIVIDER });
+        }
+        // Every top-level section is a divider; none is a sibling of *** at
+        // the same rank as the enclosing ---.
+        for b in &blocks {
+            assert_eq!(b.kind, BlockKind::Divider { rank: RANK_DIVIDER });
+        }
+        validate_tree(&blocks).expect("tree invariants");
+    }
+
+    #[test]
+    fn divider_splits_sections() {
+        let text = "---\n# A\n\ntext\n\n---\n# B\n";
+        let blocks = parse_blocks(text);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].children.len(), 1);
+        assert!(matches!(blocks[0].children[0].kind, BlockKind::Heading { level: 1 }));
+        assert_eq!(blocks[1].children.len(), 1);
+    }
+
+    #[test]
     fn nesting_under_heading() {
         let text = "# H1\n\npara1\n\n## H2\n\npara2\n";
         let blocks = parse_blocks(text);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].children.len(), 2);
+        validate_tree(&blocks).expect("tree invariants");
+    }
+
+    #[test]
+    fn heading_splits_without_blank_line() {
+        let blocks = parse_blocks("# A\n## B\n### C\ntext\n");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].children.len(), 1);
+        assert_eq!(blocks[0].children[0].children.len(), 1);
+        assert_eq!(blocks[0].children[0].children[0].children.len(), 1);
     }
 
     #[test]
@@ -376,7 +683,91 @@ mod tests {
     #[test]
     fn horizontal_rule() {
         let blocks = parse_blocks("---\n");
-        assert!(matches!(blocks[0].kind, BlockKind::HorizontalRule));
+        assert!(matches!(
+            blocks[0].kind,
+            BlockKind::Divider { rank: RANK_DIVIDER }
+        ));
+    }
+
+    #[test]
+    fn subdivider_and_underscore() {
+        let stars = parse_blocks("***\n");
+        let underscores = parse_blocks("___\n");
+        assert_eq!(
+            stars[0].kind,
+            BlockKind::Divider { rank: RANK_SUBDIVIDER }
+        );
+        assert_eq!(
+            underscores[0].kind,
+            BlockKind::Divider { rank: RANK_SUBDIVIDER }
+        );
+    }
+
+    #[test]
+    fn code_fence_keeps_blank_lines() {
+        let text = "```rust\nfn main() {}\n\n// comment\n```\n\nafter\n";
+        let blocks = parse_blocks(text);
+        assert!(matches!(
+            blocks[0].kind,
+            BlockKind::CodeBlock { lang: Some(ref lang) } if lang == "rust"
+        ));
+        assert!(blocks[0].content.contains("\n\n"));
+        assert_eq!(blocks.len(), 2);
+    }
+
+    #[test]
+    fn callout_before_quote() {
+        let text = "> [!note] Title\n> body\n";
+        let blocks = parse_blocks(text);
+        assert_eq!(blocks[0].kind, BlockKind::Callout);
+    }
+
+    #[test]
+    fn other_block_types() {
+        assert!(matches!(
+            parse_blocks("| a | b |\n|---|---|\n")[0].kind,
+            BlockKind::Table
+        ));
+        assert!(matches!(parse_blocks("$$\nx\n$$\n")[0].kind, BlockKind::Math));
+        assert!(matches!(
+            parse_blocks("<div>x</div>\n")[0].kind,
+            BlockKind::Html
+        ));
+        assert!(matches!(
+            parse_blocks("![alt](x.png)\n")[0].kind,
+            BlockKind::Image
+        ));
+        assert!(matches!(
+            parse_blocks("- item\n")[0].kind,
+            BlockKind::ListItem { indent: 0 }
+        ));
+    }
+
+    #[test]
+    fn every_kind_maps_to_registry() {
+        let kinds = vec![
+            BlockKind::Frontmatter,
+            BlockKind::Heading { level: 2 },
+            BlockKind::Divider { rank: RANK_DIVIDER },
+            BlockKind::Divider { rank: RANK_SUBDIVIDER },
+            BlockKind::Paragraph,
+            BlockKind::CodeBlock { lang: None },
+            BlockKind::ListItem { indent: 0 },
+            BlockKind::Quote,
+            BlockKind::Callout,
+            BlockKind::Table,
+            BlockKind::Math,
+            BlockKind::Html,
+            BlockKind::Image,
+        ];
+        for kind in kinds {
+            assert!(
+                kind.def().is_some(),
+                "no registry definition for {:?} (type_name {})",
+                kind,
+                kind.type_name()
+            );
+        }
     }
 
     #[test]
