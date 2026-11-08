@@ -20,8 +20,68 @@ pub struct NamingRule {
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct DomainNaming {
+    /// Host pattern. `github.com` matches exactly; `*.github.com` also matches
+    /// subdomains. A leading `www.` is ignored on both sides.
+    pub domain: String,
+    #[serde(default)]
+    pub rule: NamingRule,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct NamingConfig {
+    /// Global rules, applied in order when no domain override matches.
+    #[serde(default)]
     pub rules: Vec<NamingRule>,
+    /// Per-domain overrides. The first matching pattern wins.
+    #[serde(default)]
+    pub domains: Vec<DomainNaming>,
+}
+
+impl NamingConfig {
+    /// Sensible starting point for a fresh config: strip the usual site noise
+    /// and keep titles short. Users can edit or delete these in Settings.
+    pub fn starter() -> Self {
+        Self {
+            rules: vec![NamingRule {
+                strip: vec![
+                    " - GitHub".to_string(),
+                    " | Hacker News".to_string(),
+                    " - YouTube".to_string(),
+                    " - Stack Overflow".to_string(),
+                ],
+                max_len: Some(120),
+                ..NamingRule::default()
+            }],
+            domains: Vec::new(),
+        }
+    }
+
+    /// First per-domain rule matching `host`, if any.
+    pub fn rule_for_host(&self, host: &str) -> Option<&NamingRule> {
+        let host = normalise_host(host);
+        self.domains
+            .iter()
+            .find(|d| domain_matches(&host, &d.domain))
+            .map(|d| &d.rule)
+    }
+}
+
+fn normalise_host(host: &str) -> String {
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    host.strip_prefix("www.").unwrap_or(&host).to_string()
+}
+
+fn domain_matches(host: &str, pattern: &str) -> bool {
+    let pattern = normalise_host(pattern);
+    if pattern.is_empty() {
+        return false;
+    }
+    if let Some(suffix) = pattern.strip_prefix("*.") {
+        host == suffix || host.ends_with(&format!(".{}", suffix))
+    } else {
+        host == pattern
+    }
 }
 
 impl NamingRule {
@@ -76,15 +136,24 @@ impl NamingConfig {
             })
             .unwrap_or_else(|| "Untitled".to_string());
         let host = record.url.as_deref().and_then(host_of);
+        if let Some(host) = host
+            && let Some(rule) = self.rule_for_host(host)
+        {
+            return non_empty(rule.apply(&base, Some(host)));
+        }
         let mut result = base;
         for rule in &self.rules {
             result = rule.apply(&result, host);
         }
-        if result.trim().is_empty() {
-            "Untitled".to_string()
-        } else {
-            result
-        }
+        non_empty(result)
+    }
+}
+
+fn non_empty(value: String) -> String {
+    if value.trim().is_empty() {
+        "Untitled".to_string()
+    } else {
+        value
     }
 }
 
@@ -166,8 +235,87 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            domains: vec![],
         };
         let r = rec(Some("sea-orm - GitHub"), Some("https://github.com/sea-orm"));
         assert_eq!(cfg.derive_title(&r), "github.com: sea-orm");
+    }
+
+    #[test]
+    fn domain_override_wins_over_global() {
+        let cfg = NamingConfig {
+            rules: vec![NamingRule {
+                prefix: Some("global: ".to_string()),
+                ..Default::default()
+            }],
+            domains: vec![DomainNaming {
+                domain: "github.com".to_string(),
+                rule: NamingRule {
+                    prefix: Some("gh: ".to_string()),
+                    ..Default::default()
+                },
+            }],
+        };
+        let r = rec(Some("sea-orm"), Some("https://github.com/sea-orm"));
+        assert_eq!(cfg.derive_title(&r), "gh: sea-orm");
+    }
+
+    #[test]
+    fn domain_match_ignores_www_and_case() {
+        let cfg = NamingConfig {
+            rules: vec![],
+            domains: vec![DomainNaming {
+                domain: "github.com".to_string(),
+                rule: NamingRule {
+                    suffix: Some(" [gh]".to_string()),
+                    ..Default::default()
+                },
+            }],
+        };
+        let r = rec(Some("Repo"), Some("https://WWW.GitHub.com/org/repo"));
+        assert_eq!(cfg.derive_title(&r), "Repo [gh]");
+    }
+
+    #[test]
+    fn wildcard_domain_matches_subdomains_only() {
+        let cfg = NamingConfig {
+            rules: vec![],
+            domains: vec![DomainNaming {
+                domain: "*.example.com".to_string(),
+                rule: NamingRule {
+                    prefix: Some("ex: ".to_string()),
+                    ..Default::default()
+                },
+            }],
+        };
+        let sub = rec(Some("Page"), Some("https://docs.example.com/page"));
+        let root = rec(Some("Page"), Some("https://example.com/page"));
+        let other = rec(Some("Page"), Some("https://notexample.com/page"));
+        assert_eq!(cfg.derive_title(&sub), "ex: Page");
+        assert_eq!(cfg.derive_title(&root), "ex: Page");
+        assert_eq!(cfg.derive_title(&other), "Page");
+    }
+
+    #[test]
+    fn unmatched_domain_falls_back_to_global_rules() {
+        let cfg = NamingConfig {
+            rules: vec![NamingRule {
+                strip: vec![" - Example".to_string()],
+                ..Default::default()
+            }],
+            domains: vec![DomainNaming {
+                domain: "github.com".to_string(),
+                rule: NamingRule::default(),
+            }],
+        };
+        let r = rec(Some("Page - Example"), Some("https://other.test/page"));
+        assert_eq!(cfg.derive_title(&r), "Page");
+    }
+
+    #[test]
+    fn starter_strips_common_suffixes() {
+        let cfg = NamingConfig::starter();
+        let r = rec(Some("Repo - GitHub"), Some("https://github.com/org/repo"));
+        assert_eq!(cfg.derive_title(&r), "Repo");
     }
 }

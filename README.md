@@ -108,8 +108,25 @@ The default registered folders are the standard record types: `page`,
 `<records_root>/Records/`. An unreadable or corrupted config is salvaged for
 its last `records_root` value and rewritten cleanly on load.
 
-The GUI's Settings dialog has separate tabs for Orchid, Storage, Lilac and the
-live block type registry.
+The GUI's Settings dialog has separate tabs for Orchid, Storage, Lilac, Naming
+and the live block type registry.
+
+## Naming
+
+Page titles are cleaned up by naming rules before a record is saved. Rules live
+in the same `config.yaml` under `naming` and are edited in **Settings → Naming**:
+
+- **Global rules** run in order: strip substrings, replace `from=to`, add a
+  `{host}` / `{title}` prefix or suffix, truncate to `max_len`.
+- **Domain overrides** match a host exactly (`github.com`) or a subdomain tree
+  (`*.example.com`). The first match wins and replaces the global rules for that
+  host. `www.` is ignored, matching is case-insensitive.
+- A starter rule strips common site suffixes (` - GitHub`, ` | Hacker News`,
+  ` - YouTube`, ` - Stack Overflow`) and caps titles at 120 characters.
+
+Orchard is authoritative. The browser extension asks the host to derive a title
+and sends no rule, so editing naming in Settings changes what Lilac saves. An
+older client that still sends an explicit `rule` keeps working: that rule wins.
 
 ## Records
 

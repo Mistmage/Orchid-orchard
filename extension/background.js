@@ -179,7 +179,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const res = await send("search_records", { query: msg.query || "" });
         sendResponse({ ok: true, result: res });
       } else if (msg.type === "deriveTitle") {
-        const res = await send("derive_title", { record: msg.record, rule: msg.rule });
+        const payload = { record: msg.record };
+        if (msg.rule) payload.rule = msg.rule;
+        const res = await send("derive_title", payload);
         sendResponse({ ok: true, result: res });
       } else if (msg.type === "applyRules") {
         const res = await send("apply_rules", { record: msg.record, rules: msg.rules });

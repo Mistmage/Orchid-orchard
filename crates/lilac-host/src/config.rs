@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use lilac_core::NamingConfig;
+
 /// Standard record-type folders. These are the defaults Lilac saves into when
 /// no folder is chosen, and they are created under `<records_root>/Records`.
 pub const DEFAULT_REGISTERED_FOLDERS: &[&str] = &[
@@ -28,6 +30,8 @@ pub struct Config {
     pub records_root: Option<String>,
     #[serde(default)]
     pub registered_folders: Vec<String>,
+    #[serde(default)]
+    pub naming: NamingConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -46,6 +50,7 @@ impl Default for Config {
             version: 1,
             records_root: None,
             registered_folders: Vec::new(),
+            naming: NamingConfig::default(),
         }
     }
 }
@@ -236,6 +241,11 @@ pub fn load_config() -> (Config, PathBuf) {
         if cfg.registered_folders.is_empty() {
             cfg.registered_folders = default_registered_folders();
         }
+    }
+    // Naming has a useful starter set; an entirely empty config gets it. A
+    // config with rules or domain overrides is left untouched.
+    if cfg.naming.rules.is_empty() && cfg.naming.domains.is_empty() {
+        cfg.naming = NamingConfig::starter();
     }
     if !parsed && !normalised.is_empty() {
         // Repair the file once so the next start is clean. Do this after the

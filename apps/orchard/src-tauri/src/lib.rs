@@ -176,7 +176,33 @@ fn get_settings() -> serde_json::Value {
         "config_root": lilac_host::config::config_root().to_string_lossy(),
         "registered_folders": folders,
         "extension_id": orchid.extension_id.clone().unwrap_or_default(),
+        "naming": cfg.naming,
     })
+}
+
+#[tauri::command]
+fn set_naming_cmd(naming: lilac_core::NamingConfig) -> Result<serde_json::Value, String> {
+    let mut cfg = lilac_host::config::load_config().0;
+    cfg.naming = naming;
+    lilac_host::config::save_config(&cfg)?;
+    serde_json::to_value(&cfg.naming).map_err(|e| e.to_string())
+}
+
+/// Preview a naming config against a title/URL without saving a record.
+#[tauri::command]
+fn preview_naming_cmd(naming: lilac_core::NamingConfig, title: String, url: String) -> String {
+    let mut record = Record::new("preview", "page");
+    record.title = if title.trim().is_empty() {
+        None
+    } else {
+        Some(title)
+    };
+    record.url = if url.trim().is_empty() {
+        None
+    } else {
+        Some(url)
+    };
+    naming.derive_title(&record)
 }
 
 #[tauri::command]
@@ -326,6 +352,8 @@ pub fn run() {
             register_native_host,
             get_block_types,
             get_settings,
+            set_naming_cmd,
+            preview_naming_cmd,
             open_folder,
             set_registered_folders_cmd,
             set_records_root_cmd

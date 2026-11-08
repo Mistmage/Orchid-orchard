@@ -252,32 +252,22 @@ async function renderSettings() {
   });
   const previewCb = $("#s-preview"); if (previewCb) previewCb.addEventListener("change", () => setSetting("previewSingle", previewCb.checked));
   const defSel = $("#s-defaultfolder"); if (defSel) defSel.addEventListener("change", () => setSetting("defaultSaveFolder", defSel.value));
-  // naming rule
-  const defaultRule = { strip: [" - GitHub", " | Hacker News", " - YouTube"], replace: [], prefix: null, suffix: null, max_len: null };
-  const ruleText = await getSetting("namingRule", JSON.stringify(defaultRule));
+  // Naming is configured in Orchard Settings; the host owns the config.
   list.innerHTML += `
     <div class="item" style="margin-top:8px;">
-      <div class="title">Naming rule (JSON)</div>
-      <textarea id="s-rule" style="width:100%; height:90px; font-family:monospace; font-size:11px;">${escape(ruleText)}</textarea>
+      <div class="title">Naming rules</div>
+      <div class="url">Managed in Orchard Settings → Naming (global + per-domain templates).</div>
       <div class="row" style="margin-top:6px;">
-        <button id="s-save-rule">Save rule</button>
         <button id="s-apply-rule">Auto-name all</button>
       </div>
     </div>
   `;
-  const saveRuleBtn = $("#s-save-rule"); if (saveRuleBtn) saveRuleBtn.addEventListener("click", async () => {
-    const ta = $("#s-rule");
-    try { JSON.parse(ta.value); await setSetting("namingRule", ta.value); setStatus("Rule saved"); }
-    catch (e) { setStatus("Invalid JSON"); }
-  });
   const applyRuleBtn = $("#s-apply-rule"); if (applyRuleBtn) applyRuleBtn.addEventListener("click", async () => {
-    setStatus("Applying naming rule...");
-    let rule;
-    try { rule = JSON.parse($("#s-rule").value); } catch (e) { setStatus("Invalid JSON"); return; }
+    setStatus("Applying naming rules...");
     const items = await fetchRecent();
     let n = 0;
     for (const r of items) {
-      const resp = await call("deriveTitle", { record: { id: r.id, type: r.type, title: r.title, url: r.url, tags: r.tags || [] }, rule });
+      const resp = await call("deriveTitle", { record: { id: r.id, type: r.type, title: r.title, url: r.url, tags: r.tags || [] } });
       if (resp && resp.ok && resp.result && resp.result.title) {
         await call("updateRecord", { id: r.id, patch: { title: resp.result.title } });
         n++;

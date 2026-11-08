@@ -82,7 +82,8 @@ contain `..` are ignored.
 `list_records`, `search`, `load_record`, `get_blocks`,
 `apply_block_edit_cmd`, `undo_block_edit_cmd`, `records_root_path`,
 `register_native_host`, `get_block_types`, `get_settings`, `open_folder`,
-`set_registered_folders_cmd`, `set_records_root_cmd`.
+`set_registered_folders_cmd`, `set_records_root_cmd`, `set_naming_cmd`,
+`preview_naming_cmd`.
 
 `get_block_types` returns `{ types: [...], valid: bool }` from
 `lilac_core::block_types::describe()`. The Settings dialog uses it to render
@@ -95,3 +96,19 @@ re-read from the session and external changes are reconciled on every call.
 `expectedContent` is the text the editor started from and guards against
 positional paths drifting after an external edit. `undo_block_edit_cmd` takes
 `{ id }` and returns the same view.
+
+`get_settings` includes the live `naming` config. `set_naming_cmd({ naming })`
+saves it to `config.yaml`; `preview_naming_cmd({ naming, title, url })` derives a
+title without writing a record.
+
+## Naming
+
+`lilac_core::naming` is the single naming engine. `NamingConfig` holds ordered
+global `rules` plus `domains` overrides. `rule_for_host` normalises the host
+(lowercase, trailing dot and `www.` removed) and returns the first match;
+`github.com` matches exactly, `*.example.com` matches the root and subdomains.
+A matched override replaces the global rules rather than adding to them.
+
+The host's `derive_title` uses the saved config when the message has no `rule`,
+so Settings is authoritative for the extension. An explicit `rule` from an
+older client is still honoured.

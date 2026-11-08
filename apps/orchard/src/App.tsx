@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Index, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { EditorView, keymap } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
@@ -25,6 +25,137 @@ interface Settings {
   config_root: string;
   registered_folders: string[];
   extension_id: string;
+  naming: NamingConfig;
+}
+
+interface NamingRule {
+  strip: string[];
+  replace: [string, string][];
+  prefix: string | null;
+  suffix: string | null;
+  max_len: number | null;
+}
+
+interface DomainNaming {
+  domain: string;
+  rule: NamingRule;
+}
+
+interface NamingConfig {
+  rules: NamingRule[];
+  domains: DomainNaming[];
+}
+
+function emptyRule(): NamingRule {
+  return { strip: [], replace: [], prefix: null, suffix: null, max_len: null };
+}
+
+function emptyNaming(): NamingConfig {
+  return { rules: [emptyRule()], domains: [] };
+}
+
+function cloneNaming(n: NamingConfig): NamingConfig {
+  return JSON.parse(JSON.stringify(n)) as NamingConfig;
+}
+
+function splitList(value: string): string[] {
+  return value.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+function parsePairs(value: string): [string, string][] {
+  return splitList(value).map((pair) => {
+    const at = pair.indexOf("=");
+    return (at < 0
+      ? [pair, ""]
+      : [pair.slice(0, at).trim(), pair.slice(at + 1).trim()]) as [string, string];
+  });
+}
+
+function RuleEditor(props: {
+  rule: NamingRule;
+  title: string;
+  onChange: (rule: NamingRule) => void;
+  onRemove?: () => void;
+}) {
+  const [stripText, setStripText] = createSignal((props.rule.strip || []).join(", "));
+  const [replaceText, setReplaceText] = createSignal(
+    (props.rule.replace || []).map(([from, to]) => `${from}=${to}`).join(", "),
+  );
+  const [prefix, setPrefix] = createSignal(props.rule.prefix || "");
+  const [suffix, setSuffix] = createSignal(props.rule.suffix || "");
+  const [maxLen, setMaxLen] = createSignal(props.rule.max_len?.toString() || "");
+
+  function emit() {
+    const max = parseInt(maxLen(), 10);
+    props.onChange({
+      strip: splitList(stripText()),
+      replace: parsePairs(replaceText()),
+      prefix: prefix().trim() ? prefix() : null,
+      suffix: suffix().trim() ? suffix() : null,
+      max_len: Number.isFinite(max) && max > 0 ? max : null,
+    });
+  }
+
+  return (
+    <div class="rule-card">
+      <div class="rule-head">
+        <b>{props.title}</b>
+        <Show when={props.onRemove}>
+          <button class="danger" onClick={() => props.onRemove!()}>Remove</button>
+        </Show>
+      </div>
+      <label class="field">
+        <span>Strip (comma-separated)</span>
+        <input
+          value={stripText()}
+          placeholder=" - GitHub,  | Hacker News"
+          onInput={(e) => setStripText(e.currentTarget.value)}
+          onBlur={emit}
+        />
+      </label>
+      <label class="field">
+        <span>Replace (from=to, comma-separated)</span>
+        <input
+          value={replaceText()}
+          placeholder="docs.rs=Docs"
+          onInput={(e) => setReplaceText(e.currentTarget.value)}
+          onBlur={emit}
+        />
+      </label>
+      <div class="row">
+        <label class="field">
+          <span>Prefix</span>
+          <input
+            value={prefix()}
+            placeholder="[{host}] "
+            onInput={(e) => setPrefix(e.currentTarget.value)}
+            onBlur={emit}
+          />
+        </label>
+        <label class="field">
+          <span>Suffix</span>
+          <input
+            value={suffix()}
+            placeholder=" ({host})"
+            onInput={(e) => setSuffix(e.currentTarget.value)}
+            onBlur={emit}
+          />
+        </label>
+        <label class="field" style={{ "flex": "0 0 120px" }}>
+          <span>Max length</span>
+          <input
+            type="number"
+            min="1"
+            value={maxLen()}
+            placeholder="120"
+            onInput={(e) => setMaxLen(e.currentTarget.value)}
+            onBlur={emit}
+          />
+        </label>
+      </div>
+      <div class="hint">Templates support <code>{"{host}"}</code> and <code>{"{title}"}</code>.</div>
+    </div>
+  );
 }
 
 interface BlockTypeInfo {
@@ -200,13 +331,18 @@ export default function App() {
   const [extDraft, setExtDraft] = createSignal("");
   const [settingsMsg, setSettingsMsg] = createSignal("");
   const [blockTypes, setBlockTypes] = createSignal<BlockTypeReport | null>(null);
-  const [settingsTab, setSettingsTab] = createSignal<"orchid" | "storage" | "lilac" | "blocks">("orchid");
+  const [settingsTab, setSettingsTab] = createSignal<"orchid" | "storage" | "lilac" | "naming" | "blocks">("orchid");
+  const [namingDraft, setNamingDraft] = createSignal<NamingConfig>(emptyNaming());
+  const [previewTitle, setPreviewTitle] = createSignal("Example page - GitHub");
+  const [previewUrl, setPreviewUrl] = createSignal("https://github.com/org/repo");
+  const [previewResult, setPreviewResult] = createSignal("");
 
   async function refreshSettings() {
     const s = (await invoke("get_settings")) as Settings;
     setSettings(s);
     setRootDraft(s.records_root);
     setExtDraft(s.extension_id || "");
+    setNamingDraft(cloneNaming(s.naming || emptyNaming()));
     const bt = (await invoke("get_block_types")) as BlockTypeReport;
     setBlockTypes(bt);
   }
@@ -252,6 +388,52 @@ export default function App() {
     } catch (e) {
       setSettingsMsg("Error: " + e);
     }
+  }
+
+  async function saveNaming() {
+    try {
+      const saved = (await invoke("set_naming_cmd", { naming: namingDraft() })) as NamingConfig;
+      setNamingDraft(cloneNaming(saved));
+      setSettingsMsg("Naming rules saved.");
+      await refreshSettings();
+    } catch (e) {
+      setSettingsMsg("Error: " + e);
+    }
+  }
+
+  async function previewNaming() {
+    try {
+      const title = (await invoke("preview_naming_cmd", {
+        naming: namingDraft(),
+        title: previewTitle(),
+        url: previewUrl(),
+      })) as string;
+      setPreviewResult(title);
+    } catch (e) {
+      setPreviewResult("Error: " + e);
+    }
+  }
+
+  function updateGlobalRule(index: number, rule: NamingRule) {
+    setNamingDraft((d) => ({ ...d, rules: d.rules.map((r, i) => (i === index ? rule : r)) }));
+  }
+  function removeGlobalRule(index: number) {
+    setNamingDraft((d) => ({ ...d, rules: d.rules.filter((_, i) => i !== index) }));
+  }
+  function addGlobalRule() {
+    setNamingDraft((d) => ({ ...d, rules: [...d.rules, emptyRule()] }));
+  }
+  function updateDomain(index: number, patch: Partial<DomainNaming>) {
+    setNamingDraft((d) => ({
+      ...d,
+      domains: d.domains.map((x, i) => (i === index ? { ...x, ...patch } : x)),
+    }));
+  }
+  function removeDomain(index: number) {
+    setNamingDraft((d) => ({ ...d, domains: d.domains.filter((_, i) => i !== index) }));
+  }
+  function addDomain() {
+    setNamingDraft((d) => ({ ...d, domains: [...d.domains, { domain: "", rule: emptyRule() }] }));
   }
 
   async function load() {
@@ -360,6 +542,7 @@ export default function App() {
               <button class={"tab " + (settingsTab() === "orchid" ? "active" : "")} onClick={() => setSettingsTab("orchid")}>Orchid</button>
               <button class={"tab " + (settingsTab() === "storage" ? "active" : "")} onClick={() => setSettingsTab("storage")}>Storage</button>
               <button class={"tab " + (settingsTab() === "lilac" ? "active" : "")} onClick={() => setSettingsTab("lilac")}>Lilac</button>
+              <button class={"tab " + (settingsTab() === "naming" ? "active" : "")} onClick={() => setSettingsTab("naming")}>Naming</button>
               <button class={"tab " + (settingsTab() === "blocks" ? "active" : "")} onClick={() => setSettingsTab("blocks")}>Block types</button>
             </div>
 
@@ -480,6 +663,82 @@ export default function App() {
                   <div class="hint mono">%LOCALAPPDATA%\Lilac\lilac_host.json</div>
                   <div class="hint">Writes the Chrome and Firefox native-messaging keys. Restart the browser after registering.</div>
                 </section>
+              </Show>
+
+              <Show when={settingsTab() === "naming"}>
+                <section class="settings-section">
+                  <h3>Global rules</h3>
+                  <div class="hint">Applied in order when no domain override matches. A later rule sees the previous rule's result.</div>
+                  <Index each={namingDraft().rules}>
+                    {(rule, i) => (
+                      <RuleEditor
+                        rule={rule()}
+                        title={`Global rule ${i + 1}`}
+                        onChange={(r) => updateGlobalRule(i, r)}
+                        onRemove={() => removeGlobalRule(i)}
+                      />
+                    )}
+                  </Index>
+                  <div class="row">
+                    <button onClick={addGlobalRule}>Add global rule</button>
+                  </div>
+                </section>
+
+                <section class="settings-section">
+                  <h3>Domain overrides</h3>
+                  <div class="hint">
+                    Match a host exactly (<code class="mono">github.com</code>) or a subdomain tree
+                    (<code class="mono">*.example.com</code>). The first match wins and replaces the
+                    global rules for that host; <code class="mono">www.</code> is ignored.
+                  </div>
+                  <Index each={namingDraft().domains}>
+                    {(domain, i) => (
+                      <div class="rule-card">
+                        <div class="row">
+                          <input
+                            placeholder="example.com or *.example.com"
+                            value={domain().domain}
+                            onInput={(e) => updateDomain(i, { domain: e.currentTarget.value })}
+                          />
+                          <button class="danger" onClick={() => removeDomain(i)}>Remove</button>
+                        </div>
+                        <RuleEditor
+                          rule={domain().rule}
+                          title="Override rule"
+                          onChange={(r) => updateDomain(i, { rule: r })}
+                        />
+                      </div>
+                    )}
+                  </Index>
+                  <div class="row">
+                    <button onClick={addDomain}>Add domain override</button>
+                  </div>
+                </section>
+
+                <section class="settings-section">
+                  <h3>Preview</h3>
+                  <div class="row">
+                    <input
+                      value={previewTitle()}
+                      placeholder="Page title"
+                      onInput={(e) => setPreviewTitle(e.currentTarget.value)}
+                    />
+                    <input
+                      value={previewUrl()}
+                      placeholder="https://example.com/page"
+                      onInput={(e) => setPreviewUrl(e.currentTarget.value)}
+                    />
+                    <button onClick={previewNaming}>Preview</button>
+                  </div>
+                  <Show when={previewResult()}>
+                    <div class="hint">Result: <b>{previewResult()}</b></div>
+                  </Show>
+                </section>
+
+                <div class="row">
+                  <button class="primary" onClick={saveNaming}>Save naming rules</button>
+                  <span class="hint">Used by the browser bridge when it saves a tab.</span>
+                </div>
               </Show>
 
               <Show when={settingsTab() === "blocks"}>

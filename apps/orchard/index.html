@@ -85,6 +85,12 @@
     .registry-row .rank { width: 54px; color: var(--muted); }
     .registry-row .nesting { flex: 1; color: var(--muted); }
     .registry-row .id { color: #7f849c; }
+    .rule-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px; display: grid; gap: 8px; margin-bottom: 8px; background: color-mix(in srgb, var(--panel) 60%, transparent); }
+    .rule-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .field { display: grid; gap: 3px; flex: 1 1 160px; }
+    .field > span { font-size: 11px; color: var(--muted); }
+    .field > input { width: 100%; }
+    .settings-section .row > .field { min-width: 120px; }
     .status-ok { color: var(--ok); }
     .status-bad { color: var(--danger); }
     .error { color: var(--danger); font-size: 12px; }
