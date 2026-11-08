@@ -56,7 +56,12 @@ Research candidate.
 - References: `parent`, `related`, `links`
 - Classification: `tags`, `categories`, `status`
 - Page: `url`
-- Browser metadata (optional, ephemeral, treated as hints): `open`, `position`
+- Browser metadata (optional, ephemeral, treated as hints): `open`, `position`,
+  `tab_group`, `window_hint`
+  - `tab_group`: `{ title, color }` of the browser tab group, if any.
+  - `window_hint`: non-authoritative context such as `tab_count`, `tab_index`,
+    `pinned`, `incognito`, `selected_count`. It never contains a browser
+    window or tab id, so the record stays valid in any browser or session.
 - Wisteria-compat (reserved, no-op in v0.1): `authority`, `lineage`, `forked_from`, `policy`, `state`
 - Snapshot-awareness: `snapshot` (asset ref), `snapshot_format`, `snapshot_created`
 - Views (future): `views`
