@@ -46,13 +46,35 @@ async function fetchRecords(): Promise<Record[]> {
   return (await invoke("list_records")) as Record[];
 }
 
-async function fetchBlocks(id: string): Promise<Block[]> {
-  const json = await invoke("get_blocks", { id }) as string;
-  return JSON.parse(json) as Block[];
+interface BlockSessionView {
+  blocks: Block[];
+  body: string;
+  recovered_edits: number;
+  orphaned_wal: string | null;
+  external_changed: boolean;
 }
 
-async function applyBlockEdit(id: string, blockId: string, content: string) {
-  await invoke("apply_block_edit_cmd", { id, blockId, newContent: content });
+async function fetchBlocks(id: string): Promise<BlockSessionView> {
+  const json = await invoke("get_blocks", { id }) as string;
+  return JSON.parse(json) as BlockSessionView;
+}
+
+async function applyBlockEdit(id: string, blockPath: number[], content: string, expectedContent: string): Promise<BlockSessionView> {
+  const json = await invoke("apply_block_edit_cmd", { id, blockPath, newContent: content, expectedContent }) as string;
+  return JSON.parse(json) as BlockSessionView;
+}
+
+async function undoBlockEdit(id: string): Promise<BlockSessionView> {
+  const json = await invoke("undo_block_edit_cmd", { id }) as string;
+  return JSON.parse(json) as BlockSessionView;
+}
+
+/// Structural signature: kinds + child counts. Content edits leave it stable,
+/// so the editor is not rebuilt (and focus is not lost) on every blur-save.
+function blockShape(blocks: Block[]): string {
+  return blocks
+    .map((b) => kindLabel(b.kind) + ":" + b.children.length + (b.children.length ? "(" + blockShape(b.children) + ")" : ""))
+    .join("|");
 }
 
 function kindLabel(kind: any): string {
@@ -83,27 +105,56 @@ function kindRank(kind: any): number {
   return 255;
 }
 
-function BlockNode(props: { b: Block; recordId: string; depth: number }) {
+function isSectionKind(kind: any): boolean {
+  return !!(kind && (kind.Heading || kind.Divider));
+}
+
+function BlockNode(props: { b: Block; recordId: string; path: number[]; depth: number; indent: boolean; onSaved: (view: BlockSessionView) => void; onError: (message: string) => void }) {
+  const section = isSectionKind(props.b.kind);
   return (
-    <div style={{ "margin-left": props.depth ? "14px" : "0", "margin-bottom": "6px" }}>
-      <div style={{ "font-size": "11px", color: "#a6adc8", "margin-bottom": "2px" }}>
-        <b>{kindLabel(props.b.kind)}</b>
-        <span style={{ "margin-left": "6px", opacity: 0.7 }}>rank {kindRank(props.b.kind)}</span>
+    <div class={"block-node " + (section ? "section " : "leaf ") + (props.indent ? "indent-on" : "")}>
+      <div class="block-body">
+        <div class="block-label">
+          <b>{kindLabel(props.b.kind)}</b>
+          <span>rank {kindRank(props.b.kind)}</span>
+          <Show when={props.depth > 0}><span>depth {props.depth}</span></Show>
+        </div>
+        <CodeMirrorBlock
+          initial={props.b.content || ""}
+          onSave={async (v, expected) => {
+            try {
+              props.onSaved(await applyBlockEdit(props.recordId, props.path, v, expected));
+            } catch (e) {
+              props.onError(String(e));
+            }
+          }}
+        />
       </div>
-      <CodeMirrorBlock
-        initial={props.b.content || ""}
-        onSave={(v) => applyBlockEdit(props.recordId, props.b.id!, v).catch(() => {})}
-      />
-      <For each={props.b.children}>
-        {(c) => <BlockNode b={c} recordId={props.recordId} depth={props.depth + 1} />}
-      </For>
+      <Show when={props.b.children.length > 0}>
+        <div class="block-children">
+          <For each={props.b.children}>
+            {(c, i) => (
+              <BlockNode
+                b={c}
+                recordId={props.recordId}
+                path={[...props.path, i()]}
+                depth={props.depth + 1}
+                indent={props.indent}
+                onSaved={props.onSaved}
+                onError={props.onError}
+              />
+            )}
+          </For>
+        </div>
+      </Show>
     </div>
   );
 }
 
-function CodeMirrorBlock(props: { initial: string; onSave: (v: string) => void }) {
+function CodeMirrorBlock(props: { initial: string; onSave: (v: string, expected: string) => void }) {
   let container!: HTMLDivElement;
   let view: EditorView | undefined;
+  let lastSaved = props.initial;
 
   // minimal extensions: view + state + basic keymap, no history/language/autocomplete
   const extensions = [
@@ -117,7 +168,12 @@ function CodeMirrorBlock(props: { initial: string; onSave: (v: string) => void }
     const state = EditorState.create({ doc: props.initial, extensions });
     view = new EditorView({ state, parent: container });
     view.dom.addEventListener("blur", () => {
-      if (view) props.onSave(view.state.doc.toString());
+      if (!view) return;
+      const text = view.state.doc.toString();
+      if (text === lastSaved) return;
+      const previous = lastSaved;
+      lastSaved = text;
+      props.onSave(text, previous);
     }, true);
   }, 0);
 
@@ -134,7 +190,9 @@ export default function App() {
   const [query, setQuery] = createSignal("");
   const [expanded, setExpanded] = createSignal<string | null>(null);
   const [blocks, setBlocks] = createSignal<Block[]>([]);
+  const [blockNotice, setBlockNotice] = createSignal("");
   const [iconChoice, setIconChoice] = createSignal(localStorage.getItem("orchard.icon") || "flower");
+  const [indentBlocks, setIndentBlocks] = createSignal(localStorage.getItem("orchard.indentBlocks") !== "false");
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [settings, setSettings] = createSignal<Settings | null>(null);
   const [rootDraft, setRootDraft] = createSignal("");
@@ -142,6 +200,7 @@ export default function App() {
   const [extDraft, setExtDraft] = createSignal("");
   const [settingsMsg, setSettingsMsg] = createSignal("");
   const [blockTypes, setBlockTypes] = createSignal<BlockTypeReport | null>(null);
+  const [settingsTab, setSettingsTab] = createSignal<"orchid" | "storage" | "lilac" | "blocks">("orchid");
 
   async function refreshSettings() {
     const s = (await invoke("get_settings")) as Settings;
@@ -186,6 +245,15 @@ export default function App() {
     }
   }
 
+  async function openFolder(which: "root" | "records" | "config") {
+    try {
+      const p = (await invoke("open_folder", { which })) as string;
+      setSettingsMsg("Opened " + p);
+    } catch (e) {
+      setSettingsMsg("Error: " + e);
+    }
+  }
+
   async function load() {
     const q = query().trim();
     const res = q ? await invoke("search", { query: q }) as Record[] : await fetchRecords();
@@ -193,9 +261,61 @@ export default function App() {
   }
 
   async function toggle(id: string) {
+    setBlockNotice("");
     if (expanded() === id) { setExpanded(null); setBlocks([]); return; }
     setExpanded(id);
-    setBlocks(await fetchBlocks(id));
+    try {
+      const view = await fetchBlocks(id);
+      setBlocks(view.blocks);
+      if (view.recovered_edits) {
+        setBlockNotice(`Recovered ${view.recovered_edits} unsaved edit${view.recovered_edits === 1 ? "" : "s"} from the write-ahead log.`);
+      } else if (view.orphaned_wal) {
+        setBlockNotice(`Ignored an out-of-date write-ahead log, kept aside at ${view.orphaned_wal}`);
+      } else if (view.external_changed) {
+        setBlockNotice("This file changed outside Orchard; the view was refreshed.");
+      }
+    } catch (e) {
+      setBlockNotice("Could not open record: " + String(e));
+    }
+  }
+
+  function handleSaved(id: string, view: BlockSessionView) {
+    setBlockNotice("");
+    if (view.external_changed) {
+      setBlockNotice("Incorporated changes another program made to this file.");
+    }
+    // Only rebuild the tree when the document shape actually changed.
+    if (blockShape(view.blocks) !== blockShape(blocks())) {
+      setBlocks(view.blocks);
+    }
+  }
+
+  async function undo(id: string) {
+    try {
+      const view = await undoBlockEdit(id);
+      setBlocks(view.blocks);
+      setBlockNotice("Undid the last edit.");
+    } catch (e) {
+      setBlockNotice("Undo failed: " + String(e));
+    }
+  }
+
+  async function reloadBlocks(id: string) {
+    try {
+      const view = await fetchBlocks(id);
+      setBlocks(view.blocks);
+    } catch {
+      /* the notice already explains the failure */
+    }
+  }
+
+  function handleSaveError(id: string, message: string) {
+    setBlockNotice("Save failed: " + message);
+    // The block path may now point at a different block. Reload so the next
+    // edit is addressed correctly and the user sees the current text.
+    if (message.includes("changed on disk")) {
+      reloadBlocks(id);
+    }
   }
 
   // initial load
@@ -207,6 +327,10 @@ export default function App() {
     localStorage.setItem("orchard.icon", c);
     const link = document.querySelector('link[rel="icon"]') as HTMLLinkElement | null;
     if (link) link.href = c === "sideways" ? "/icon2.svg" : "/icon.svg";
+  });
+
+  createEffect(() => {
+    localStorage.setItem("orchard.indentBlocks", String(indentBlocks()));
   });
 
   return (
@@ -225,127 +349,167 @@ export default function App() {
         <button onClick={() => load()}>Search</button>
       </header>
       <Show when={settingsOpen()}>
-        <div
-          style={{
-            position: "fixed", inset: "0", background: "rgba(0,0,0,0.55)",
-            display: "flex", "align-items": "flex-start", "justify-content": "center",
-            "z-index": "100", padding: "48px 16px", overflow: "auto",
-          }}
-          onClick={(e) => { if (e.target === e.currentTarget) setSettingsOpen(false); }}
-        >
-          <div style={{
-            width: "min(640px, 100%)", background: "#1e1e2e", border: "1px solid #45475a",
-            "border-radius": "12px", padding: "20px", display: "grid", gap: "16px",
-          }}>
-            <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between" }}>
-              <h2 style={{ margin: "0", "font-size": "18px" }}>Settings</h2>
+        <div class="settings-modal" onClick={(e) => { if (e.target === e.currentTarget) setSettingsOpen(false); }}>
+          <div class="settings-panel" onClick={(e) => e.stopPropagation()}>
+            <div class="settings-head">
+              <h2>Settings</h2>
               <button onClick={() => setSettingsOpen(false)}>Close</button>
             </div>
 
-            <section>
-              <h3 style={{ "font-size": "13px", "text-transform": "uppercase", color: "#a6adc8", margin: "0 0 6px" }}>Appearance</h3>
-              <label style={{ display: "flex", gap: "8px", "align-items": "center" }}>
-                <span>Icon</span>
-                <select
-                  value={iconChoice()}
-                  onChange={(e) => setIconChoice(e.currentTarget.value)}
-                  style={{ padding: "4px", "border-radius": "6px", background: "#313244", color: "#cdd6f4", border: "1px solid #45475a" }}
-                >
-                  <option value="flower">Flower (top view)</option>
-                  <option value="sideways">Flower (side view)</option>
-                </select>
-              </label>
-            </section>
+            <div class="settings-tabs">
+              <button class={"tab " + (settingsTab() === "orchid" ? "active" : "")} onClick={() => setSettingsTab("orchid")}>Orchid</button>
+              <button class={"tab " + (settingsTab() === "storage" ? "active" : "")} onClick={() => setSettingsTab("storage")}>Storage</button>
+              <button class={"tab " + (settingsTab() === "lilac" ? "active" : "")} onClick={() => setSettingsTab("lilac")}>Lilac</button>
+              <button class={"tab " + (settingsTab() === "blocks" ? "active" : "")} onClick={() => setSettingsTab("blocks")}>Block types</button>
+            </div>
 
-            <section>
-              <h3 style={{ "font-size": "13px", "text-transform": "uppercase", color: "#a6adc8", margin: "0 0 6px" }}>Storage</h3>
-              <div style={{ display: "flex", gap: "8px", "align-items": "center", "flex-wrap": "wrap" }}>
-                <input
-                  value={rootDraft()}
-                  onInput={(e) => setRootDraft(e.currentTarget.value)}
-                  style={{ flex: "1 1 280px", padding: "6px 10px", "border-radius": "6px", border: "1px solid #45475a", background: "#313244", color: "#cdd6f4" }}
-                />
-                <button onClick={() => saveRoot()}>Save root</button>
-              </div>
-              <div style={{ "font-size": "12px", color: "#a6adc8", "margin-top": "4px" }}>
-                Config: {settings()?.config_root || "…"}
-              </div>
-            </section>
+            <div class="settings-body">
+              <Show when={settingsTab() === "orchid"}>
+                <section class="settings-section">
+                  <h3>Appearance</h3>
+                  <label class="row">
+                    <span>App icon</span>
+                    <select value={iconChoice()} onChange={(e) => setIconChoice(e.currentTarget.value)}>
+                      <option value="flower">Flower (top view)</option>
+                      <option value="sideways">Flower (side view)</option>
+                    </select>
+                  </label>
+                  <div class="hint">The icon is also embedded in <code class="mono">orchard.exe</code>; rebuild to update the taskbar and window icon.</div>
+                  <label class="row">
+                    <input
+                      type="checkbox"
+                      checked={indentBlocks()}
+                      onChange={(e) => setIndentBlocks(e.currentTarget.checked)}
+                    />
+                    <span>Indent block hierarchy</span>
+                  </label>
+                  <div class="hint">Off keeps every block at the same left edge; hierarchy stays internal and is shown by rank/depth labels.</div>
+                </section>
 
-            <section>
-              <h3 style={{ "font-size": "13px", "text-transform": "uppercase", color: "#a6adc8", margin: "0 0 6px" }}>Registered folders</h3>
-              <div style={{ display: "grid", gap: "6px" }}>
-                <For each={settings()?.registered_folders || []}>
-                  {(f) => (
-                    <div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
-                      <code style={{ flex: "1", background: "#313244", padding: "4px 8px", "border-radius": "4px" }}>{f}</code>
-                      <button onClick={() => saveFolders((settings()?.registered_folders || []).filter((x) => x !== f))}>Remove</button>
-                    </div>
-                  )}
-                </For>
-                <Show when={!(settings()?.registered_folders || []).length}>
-                  <div style={{ "font-size": "12px", color: "#a6adc8" }}>
-                    None yet. Lilac saves to <code>Records/&lt;type&gt;</code> until you add folders.
+                <section class="settings-section">
+                  <h3>Orchid configuration</h3>
+                  <div class="row">
+                    <code class="mono" style={{ flex: "1", overflow: "auto" }}>{settings()?.config_root || "…"}</code>
+                    <button onClick={() => openFolder("config")}>Open config folder</button>
                   </div>
-                </Show>
-                <div style={{ display: "flex", gap: "8px" }}>
-                  <input
-                    value={folderDraft()}
-                    placeholder="e.g. Reading/Articles"
-                    onInput={(e) => setFolderDraft(e.currentTarget.value)}
-                    style={{ flex: "1", padding: "6px 10px", "border-radius": "6px", border: "1px solid #45475a", background: "#313244", color: "#cdd6f4" }}
-                  />
-                  <button onClick={async () => {
-                    const f = folderDraft().trim();
-                    if (!f) return;
-                    const cur = settings()?.registered_folders || [];
-                    if (!cur.includes(f)) await saveFolders([...cur, f]);
-                    setFolderDraft("");
-                  }}>Add</button>
-                </div>
-              </div>
-            </section>
+                  <div class="hint">Orchid settings (window, icon, app folders) live here. Lilac's browser bridge settings are on their own tab.</div>
+                </section>
 
-            <section>
-              <h3 style={{ "font-size": "13px", "text-transform": "uppercase", color: "#a6adc8", margin: "0 0 6px" }}>Browser bridge (Lilac)</h3>
-              <div style={{ display: "flex", gap: "8px", "flex-wrap": "wrap" }}>
-                <input
-                  value={extDraft()}
-                  placeholder="Chrome extension ID"
-                  onInput={(e) => setExtDraft(e.currentTarget.value)}
-                  style={{ flex: "1 1 280px", padding: "6px 10px", "border-radius": "6px", border: "1px solid #45475a", background: "#313244", color: "#cdd6f4" }}
-                />
-                <button onClick={() => registerHost()}>Register native host</button>
-              </div>
-              <div style={{ "font-size": "12px", color: "#a6adc8", "margin-top": "4px" }}>
-                Registers this same <code>orchard.exe</code> for Chrome and Firefox.
-              </div>
-            </section>
+                <section class="settings-section">
+                  <h3>About</h3>
+                  <div class="hint">Orchard 0.1.0 · single executable: GUI + native-messaging host.</div>
+                </section>
+              </Show>
 
-            <section>
-              <h3 style={{ "font-size": "13px", "text-transform": "uppercase", color: "#a6adc8", margin: "0 0 6px" }}>Block types</h3>
-              <div style={{ "font-size": "12px", "margin-bottom": "6px", color: blockTypes()?.valid ? "#a6e3a1" : "#f38ba8" }}>
-                {blockTypes() ? `${blockTypes()!.types.length} registered · registry ${blockTypes()!.valid ? "valid" : "INVALID"}` : "…"}
-              </div>
-              <div style={{ display: "grid", gap: "3px", "max-height": "180px", overflow: "auto" }}>
-                <For each={blockTypes()?.types || []}>
-                  {(t) => (
-                    <div
-                      title={t.metadata.length ? "metadata: " + t.metadata.map((m) => m.name + ":" + m.kind + (m.required ? "!" : "")).join(", ") : "no metadata fields"}
-                      style={{ display: "flex", gap: "8px", "font-size": "12px", "font-family": "monospace" }}
-                    >
-                      <span style={{ width: "110px" }}>{t.name}</span>
-                      <span style={{ width: "60px", opacity: 0.8 }}>r{t.rank}</span>
-                      <span style={{ flex: "1", opacity: 0.7 }}>{t.nesting}</span>
-                      <span style={{ opacity: 0.55 }}>{t.id}</span>
+              <Show when={settingsTab() === "storage"}>
+                <section class="settings-section">
+                  <h3>Records root</h3>
+                  <div class="row">
+                    <input value={rootDraft()} onInput={(e) => setRootDraft(e.currentTarget.value)} />
+                    <button class="primary" onClick={() => saveRoot()}>Save root</button>
+                    <button onClick={() => openFolder("root")}>Open</button>
+                  </div>
+                  <div class="hint">Portable Markdown + YAML records. Indexes are caches and can be rebuilt from this folder.</div>
+                </section>
+
+                <section class="settings-section">
+                  <h3>Folders</h3>
+                  <div class="row" style={{ "justify-content": "space-between" }}>
+                    <span class="hint">Destinations Lilac can save into, relative to <code>Records/</code>.</span>
+                    <button onClick={() => openFolder("records")}>Open Records</button>
+                  </div>
+                  <div style={{ display: "grid", gap: "6px" }}>
+                    <For each={settings()?.registered_folders || []}>
+                      {(f) => (
+                        <div class="list-row">
+                          <code class="mono">Records/{f}</code>
+                          <button class="danger" onClick={() => saveFolders((settings()?.registered_folders || []).filter((x) => x !== f))}>Remove</button>
+                        </div>
+                      )}
+                    </For>
+                    <Show when={!(settings()?.registered_folders || []).length}>
+                      <div class="hint">No registered folders. Lilac falls back to <code>Records/&lt;type&gt;</code>.</div>
+                    </Show>
+                    <div class="row">
+                      <input value={folderDraft()} placeholder="e.g. Reading/Articles" onInput={(e) => setFolderDraft(e.currentTarget.value)} />
+                      <button onClick={async () => {
+                        const f = folderDraft().trim().replace(/^\/+|\/+$/g, "");
+                        if (!f) return;
+                        const cur = settings()?.registered_folders || [];
+                        if (!cur.includes(f)) await saveFolders([...cur, f]);
+                        setFolderDraft("");
+                      }}>Add folder</button>
                     </div>
-                  )}
-                </For>
-              </div>
-            </section>
+                  </div>
+                </section>
+
+                <section class="settings-section">
+                  <h3>Config root</h3>
+                  <div class="row">
+                    <code class="mono" style={{ flex: "1", overflow: "auto" }}>{settings()?.config_root || "…"}</code>
+                    <button onClick={() => openFolder("config")}>Open</button>
+                  </div>
+                  <div class="hint">Machine-specific settings, logs, rules, WAL and caches. Regenerable; never the source of truth.</div>
+                </section>
+              </Show>
+
+              <Show when={settingsTab() === "lilac"}>
+                <section class="settings-section">
+                  <h3>Browser bridge</h3>
+                  <div class="hint">
+                    Lilac is the browser extension. Orchard is the store. This executable is also the native-messaging host, so the browser launches this same <code>orchard.exe</code>.
+                  </div>
+                  <div class="row">
+                    <input value={extDraft()} placeholder="Chrome extension ID" onInput={(e) => setExtDraft(e.currentTarget.value)} />
+                    <button class="primary" onClick={() => registerHost()}>Register native host</button>
+                  </div>
+                  <div class="hint">Re-register whenever the extension ID or the executable path changes.</div>
+                </section>
+
+                <section class="settings-section">
+                  <h3>Where Lilac saves</h3>
+                  <div class="row">
+                    <code class="mono" style={{ flex: "1", overflow: "auto" }}>{settings()?.records_root || "…"}</code>
+                    <button onClick={() => openFolder("root")}>Open</button>
+                  </div>
+                  <div class="hint">Lilac may only choose from the registered folders in the Storage tab.</div>
+                </section>
+
+                <section class="settings-section">
+                  <h3>Host manifest</h3>
+                  <div class="hint mono">%LOCALAPPDATA%\Lilac\lilac_host.json</div>
+                  <div class="hint">Writes the Chrome and Firefox native-messaging keys. Restart the browser after registering.</div>
+                </section>
+              </Show>
+
+              <Show when={settingsTab() === "blocks"}>
+                <section class="settings-section">
+                  <h3>Declared block types</h3>
+                  <div class={"hint " + (blockTypes()?.valid ? "status-ok" : "status-bad")}>
+                    {blockTypes() ? `${blockTypes()!.types.length} registered · registry ${blockTypes()!.valid ? "valid" : "INVALID"}` : "…"}
+                  </div>
+                  <div class="registry">
+                    <For each={blockTypes()?.types || []}>
+                      {(t) => (
+                        <div
+                          class="registry-row"
+                          title={t.metadata.length ? "metadata: " + t.metadata.map((m) => m.name + ":" + m.kind + (m.required ? "!" : "")).join(", ") : "no metadata fields"}
+                        >
+                          <span class="name">{t.name}</span>
+                          <span class="rank">r{t.rank}</span>
+                          <span class="nesting">{t.nesting}</span>
+                          <span class="id">{t.id}</span>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                  <div class="hint">The parser and tree builder read this registry; adding a type is one declaration. Hover a row for metadata fields.</div>
+                </section>
+              </Show>
+            </div>
 
             <Show when={settingsMsg()}>
-              <div style={{ "font-size": "12px", color: "#a6e3a1", "word-break": "break-word" }}>{settingsMsg()}</div>
+              <div class="hint" style={{ "word-break": "break-word" }}>{settingsMsg()}</div>
             </Show>
           </div>
         </div>
@@ -359,8 +523,24 @@ export default function App() {
               <div class="tags">{(r.tags || []).join(", ")}</div>
               <Show when={expanded() === r.id}>
                 <div class="blocks" style={{ "margin-top": "8px" }}>
+                  <div class="row" style={{ "margin-bottom": "6px" }}>
+                    <button onClick={(e) => { e.stopPropagation(); undo(r.id); }} title="Undo the last block edit">Undo</button>
+                    <Show when={blockNotice()}>
+                      <span class="error">{blockNotice()}</span>
+                    </Show>
+                  </div>
                   <For each={blocks()}>
-                    {(b) => <BlockNode b={b} recordId={r.id} depth={0} />}
+                    {(b, i) => (
+                      <BlockNode
+                        b={b}
+                        recordId={r.id}
+                        path={[i()]}
+                        depth={0}
+                        indent={indentBlocks()}
+                        onSaved={(view) => handleSaved(r.id, view)}
+                        onError={(message) => handleSaveError(r.id, message)}
+                      />
+                    )}
                   </For>
                 </div>
               </Show>

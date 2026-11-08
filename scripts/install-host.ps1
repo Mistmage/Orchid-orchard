@@ -73,19 +73,27 @@ Set-ItemProperty -Path $ffKey -Name "(Default)" -Value $manifestPath
 Write-Host "Registered Firefox host."
 
 # Write records_root into the shared Orchard config (merge, don't clobber).
+# Read as one string: an old installer could leave the file with no newlines,
+# and Get-Content would then return a single line and `+=` would concatenate.
 $configRoot = Join-Path $env:USERPROFILE ".orchard\.lilac"
 New-Item -ItemType Directory -Force -Path $configRoot | Out-Null
 $configPath = Join-Path $configRoot "config.yaml"
-$lines = @()
+$text = ""
 if (Test-Path $configPath) {
-    $lines = Get-Content $configPath
-    $lines = $lines | Where-Object { $_ -notmatch '^\s*records_root\s*:' }
+    $text = [System.IO.File]::ReadAllText($configPath)
 }
-if ($lines.Count -eq 0) {
-    $lines = @("version: 1")
+$text = $text.TrimStart([char]0xFEFF)
+# Drop every previous records_root scalar, including concatenated ones.
+$text = [regex]::Replace($text, "records_root:\s*""[^""]*""", "")
+$text = [regex]::Replace($text, "records_root:\s*'[^']*'", "")
+$text = [regex]::Replace($text, "records_root:\s*[^\s]+", "")
+$lines = @($text -split "\r?\n" | Where-Object { $_.Trim() -ne "" })
+if (-not ($lines | Where-Object { $_ -match '^\s*version\s*:' })) {
+    $lines = @("version: 1") + $lines
 }
-$lines += "records_root: `"$RecordsRoot`""
-$lines | Set-Content -Path $configPath -Encoding UTF8
+$yamlPath = $RecordsRoot.Replace("'", "''")
+$lines += "records_root: '$yamlPath'"
+[System.IO.File]::WriteAllLines($configPath, $lines, (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "Set records_root = $RecordsRoot in $configPath"
 
 Write-Host ""

@@ -103,8 +103,13 @@ truth:
   extension id).
 - Legacy `~/.lilac/config.yaml` is migrated once on first load.
 
-The GUI's Settings dialog edits these values and shows the live block type
-registry.
+The default registered folders are the standard record types: `page`,
+`collection`, `bookmark`, `snapshot`, `note`, `snippet`. They are created under
+`<records_root>/Records/`. An unreadable or corrupted config is salvaged for
+its last `records_root` value and rewritten cleanly on load.
+
+The GUI's Settings dialog has separate tabs for Orchid, Storage, Lilac and the
+live block type registry.
 
 ## Records
 

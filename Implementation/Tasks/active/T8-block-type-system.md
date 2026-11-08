@@ -28,10 +28,19 @@ Shipped:
 - Tauri `get_block_types` command; Settings lists every type with rank, nesting,
   id policy and registry validity; the record view renders the block tree
   recursively with rank labels.
+- Record editing is path-addressed (`blockPath`) and runs through
+  `RecordSession` (`crates/lilac-core/src/session.rs`): WAL replay, external
+  change reconciliation, undo, and an `expectedContent` guard against positional
+  paths drifting. See `../../Markdown/Design/record-session.md`.
+- The record view has a user-toggleable hierarchy indent (default on); with it
+  off, all blocks share the same left edge and hierarchy stays internal.
+- Settings is split into Orchid / Storage / Lilac / Block types tabs, with styled
+  buttons and inputs.
 
-Verified: 53 core + 10 roundtrip + 5 probe tests pass, frontend and Tauri debug
-builds succeed, and a live record shows `---` sections containing `***`
-sub-sections with headings nested at rank 30+.
+Verified: 58 core + 10 roundtrip + 5 probe + 4 config tests pass, clippy is
+clean, frontend/Tauri/release builds succeed, and live CDP checks confirm block
+editing, external-change refusal, undo, WAL replay, config repair and folder
+creation.
 
 Remaining:
 

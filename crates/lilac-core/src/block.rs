@@ -22,19 +22,27 @@
 use std::collections::HashMap;
 
 use crate::block_types::{
-    self, BlockTypeDef, IdPolicy, MetaField, Nesting, RANK_DIVIDER, RANK_SUBDIVIDER,
-    classify_line, fence_marker, heading_level, list_marker, starts_new_block,
+    self, BlockTypeDef, IdPolicy, MetaField, Nesting, RANK_DIVIDER, RANK_SUBDIVIDER, classify_line,
+    fence_marker, heading_level, list_marker, starts_new_block,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BlockKind {
     Frontmatter,
-    Heading { level: u8 },
+    Heading {
+        level: u8,
+    },
     /// `---` (rank [`RANK_DIVIDER`]) or `***`/`___` (rank [`RANK_SUBDIVIDER`]).
-    Divider { rank: u8 },
+    Divider {
+        rank: u8,
+    },
     Paragraph,
-    CodeBlock { lang: Option<String> },
-    ListItem { indent: usize },
+    CodeBlock {
+        lang: Option<String>,
+    },
+    ListItem {
+        indent: usize,
+    },
     Quote,
     Callout,
     Table,
@@ -42,7 +50,9 @@ pub enum BlockKind {
     Html,
     Image,
     /// Escape hatch for user-defined block types; always a leaf.
-    Custom { name: String },
+    Custom {
+        name: String,
+    },
 }
 
 impl BlockKind {
@@ -134,6 +144,36 @@ pub fn find_block(blocks: &[Block], id: &str) -> Option<Block> {
         }
     }
     None
+}
+
+/// Find a block by its position path (`[0]` = first root, `[0, 2]` = third
+/// child of the first root). Every block is addressable this way, including
+/// leaves without ids, which is what the editor uses.
+pub fn block_at_path<'a>(blocks: &'a [Block], path: &[usize]) -> Option<&'a Block> {
+    let (first, rest) = path.split_first()?;
+    let block = blocks.get(*first)?;
+    if rest.is_empty() {
+        Some(block)
+    } else {
+        block_at_path(&block.children, rest)
+    }
+}
+
+/// Apply an edit addressed by position path. The tree is re-parsed first, so
+/// the path always refers to the current document structure.
+pub fn apply_block_edit_at_path(
+    text: &str,
+    path: &[usize],
+    new_content: &str,
+) -> Result<String, String> {
+    let blocks = parse_blocks(text);
+    let block =
+        block_at_path(&blocks, path).ok_or_else(|| format!("block path not found: {:?}", path))?;
+    let (start, end) = block.span;
+    if start > end || end > text.len() {
+        return Err(format!("invalid span for block path {:?}", path));
+    }
+    Ok(splice_block(text, block, new_content))
 }
 
 /// Splice new content into a block's byte span, preserving everything else.
@@ -283,7 +323,11 @@ fn split_frontmatter(text: &str) -> Option<(usize, String)> {
                 serde_yaml::from_str::<serde_yaml::Value>(&fm),
                 Ok(serde_yaml::Value::Mapping(ref m)) if !m.is_empty()
             );
-            return if looks_like_mapping { Some((end, fm)) } else { None };
+            return if looks_like_mapping {
+                Some((end, fm))
+            } else {
+                None
+            };
         }
         fm.push_str(line);
         offset += line.len();
@@ -334,9 +378,7 @@ fn parse_flat_rest(text: &str, base_offset: usize) -> Vec<FlatBlock> {
             // Headings/dividers own exactly their own line; following content
             // becomes their children.
         } else {
-            while j < lines.len()
-                && !lines[j].1.trim().is_empty()
-                && !starts_new_block(lines[j].1)
+            while j < lines.len() && !lines[j].1.trim().is_empty() && !starts_new_block(lines[j].1)
             {
                 j += 1;
             }
@@ -382,9 +424,7 @@ fn classify_block(content: &str) -> BlockKind {
         block_types::Syntax::Heading => BlockKind::Heading {
             level: heading_level(first).unwrap_or(1),
         },
-        block_types::Syntax::ThematicBreak => BlockKind::Divider {
-            rank: RANK_DIVIDER,
-        },
+        block_types::Syntax::ThematicBreak => BlockKind::Divider { rank: RANK_DIVIDER },
         block_types::Syntax::SubDivider => BlockKind::Divider {
             rank: RANK_SUBDIVIDER,
         },
@@ -528,7 +568,11 @@ pub fn validate_tree(blocks: &[Block]) -> Result<(), Vec<String>> {
     for b in blocks {
         validate_block(b, None, &mut errors);
     }
-    if errors.is_empty() { Ok(()) } else { Err(errors) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 fn validate_block(block: &Block, parent_rank: Option<u8>, errors: &mut Vec<String>) {
@@ -629,13 +673,15 @@ mod tests {
     fn ranked_divider_nesting() {
         // --- opens a top section; *** is one rank lower and splits it.
         let blocks = parse_blocks("---\n***\n***\n---\n");
-        assert_eq!(
-            blocks[0].kind,
-            BlockKind::Divider { rank: RANK_DIVIDER }
-        );
+        assert_eq!(blocks[0].kind, BlockKind::Divider { rank: RANK_DIVIDER });
         assert_eq!(blocks[0].children.len(), 2);
         for c in &blocks[0].children {
-            assert_eq!(c.kind, BlockKind::Divider { rank: RANK_SUBDIVIDER });
+            assert_eq!(
+                c.kind,
+                BlockKind::Divider {
+                    rank: RANK_SUBDIVIDER
+                }
+            );
         }
         // Every top-level section is a divider; none is a sibling of *** at
         // the same rank as the enclosing ---.
@@ -651,7 +697,10 @@ mod tests {
         let blocks = parse_blocks(text);
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].children.len(), 1);
-        assert!(matches!(blocks[0].children[0].kind, BlockKind::Heading { level: 1 }));
+        assert!(matches!(
+            blocks[0].children[0].kind,
+            BlockKind::Heading { level: 1 }
+        ));
         assert_eq!(blocks[1].children.len(), 1);
     }
 
@@ -695,11 +744,15 @@ mod tests {
         let underscores = parse_blocks("___\n");
         assert_eq!(
             stars[0].kind,
-            BlockKind::Divider { rank: RANK_SUBDIVIDER }
+            BlockKind::Divider {
+                rank: RANK_SUBDIVIDER
+            }
         );
         assert_eq!(
             underscores[0].kind,
-            BlockKind::Divider { rank: RANK_SUBDIVIDER }
+            BlockKind::Divider {
+                rank: RANK_SUBDIVIDER
+            }
         );
     }
 
@@ -728,7 +781,10 @@ mod tests {
             parse_blocks("| a | b |\n|---|---|\n")[0].kind,
             BlockKind::Table
         ));
-        assert!(matches!(parse_blocks("$$\nx\n$$\n")[0].kind, BlockKind::Math));
+        assert!(matches!(
+            parse_blocks("$$\nx\n$$\n")[0].kind,
+            BlockKind::Math
+        ));
         assert!(matches!(
             parse_blocks("<div>x</div>\n")[0].kind,
             BlockKind::Html
@@ -749,7 +805,9 @@ mod tests {
             BlockKind::Frontmatter,
             BlockKind::Heading { level: 2 },
             BlockKind::Divider { rank: RANK_DIVIDER },
-            BlockKind::Divider { rank: RANK_SUBDIVIDER },
+            BlockKind::Divider {
+                rank: RANK_SUBDIVIDER,
+            },
             BlockKind::Paragraph,
             BlockKind::CodeBlock { lang: None },
             BlockKind::ListItem { indent: 0 },

@@ -154,20 +154,64 @@ pub struct MetaField {
 }
 
 const FRONTMATTER_FIELDS: &[MetaField] = &[
-    MetaField { name: "id", kind: MetaKind::Text, required: true },
-    MetaField { name: "type", kind: MetaKind::Text, required: true },
-    MetaField { name: "title", kind: MetaKind::Text, required: false },
-    MetaField { name: "tags", kind: MetaKind::List, required: false },
-    MetaField { name: "status", kind: MetaKind::Text, required: false },
-    MetaField { name: "created", kind: MetaKind::Text, required: false },
-    MetaField { name: "modified", kind: MetaKind::Text, required: false },
-    MetaField { name: "folder", kind: MetaKind::Text, required: false },
-    MetaField { name: "url", kind: MetaKind::Text, required: false },
+    MetaField {
+        name: "id",
+        kind: MetaKind::Text,
+        required: true,
+    },
+    MetaField {
+        name: "type",
+        kind: MetaKind::Text,
+        required: true,
+    },
+    MetaField {
+        name: "title",
+        kind: MetaKind::Text,
+        required: false,
+    },
+    MetaField {
+        name: "tags",
+        kind: MetaKind::List,
+        required: false,
+    },
+    MetaField {
+        name: "status",
+        kind: MetaKind::Text,
+        required: false,
+    },
+    MetaField {
+        name: "created",
+        kind: MetaKind::Text,
+        required: false,
+    },
+    MetaField {
+        name: "modified",
+        kind: MetaKind::Text,
+        required: false,
+    },
+    MetaField {
+        name: "folder",
+        kind: MetaKind::Text,
+        required: false,
+    },
+    MetaField {
+        name: "url",
+        kind: MetaKind::Text,
+        required: false,
+    },
 ];
 
 const HEADING_FIELDS: &[MetaField] = &[
-    MetaField { name: "level", kind: MetaKind::Number, required: true },
-    MetaField { name: "id", kind: MetaKind::Text, required: false },
+    MetaField {
+        name: "level",
+        kind: MetaKind::Number,
+        required: true,
+    },
+    MetaField {
+        name: "id",
+        kind: MetaKind::Text,
+        required: false,
+    },
 ];
 
 const DIVIDER_FIELDS: &[MetaField] = &[MetaField {
@@ -240,7 +284,9 @@ pub const BLOCK_TYPES: &[BlockTypeDef] = &[
         name: "heading",
         title: "Heading",
         syntax: Syntax::Heading,
-        nesting: Nesting::Heading { base: RANK_HEADING_BASE },
+        nesting: Nesting::Heading {
+            base: RANK_HEADING_BASE,
+        },
         id: IdPolicy::EagerSlug,
         metadata: HEADING_FIELDS,
     },
@@ -434,7 +480,10 @@ pub fn validate_registry() -> Result<(), Vec<String>> {
             Nesting::Root => root_count += 1,
             Nesting::Section(rank) => {
                 if rank == 0 || rank == RANK_LEAF {
-                    errors.push(format!("{}: section rank {} is out of range", def.name, rank));
+                    errors.push(format!(
+                        "{}: section rank {} is out of range",
+                        def.name, rank
+                    ));
                 }
                 if let Some(prev) = section_ranks.insert(rank, def.name) {
                     errors.push(format!(
@@ -452,7 +501,10 @@ pub fn validate_registry() -> Result<(), Vec<String>> {
         errors.push("registry must declare a paragraph fallback".to_string());
     }
     if root_count != 1 {
-        errors.push(format!("expected exactly one root type, found {}", root_count));
+        errors.push(format!(
+            "expected exactly one root type, found {}",
+            root_count
+        ));
     }
 
     for (name, base) in heading_bases {
@@ -471,7 +523,11 @@ pub fn validate_registry() -> Result<(), Vec<String>> {
         }
     }
 
-    if errors.is_empty() { Ok(()) } else { Err(errors) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 /// JSON description for the diagnostics UI / external tools.

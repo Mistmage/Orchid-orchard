@@ -2,6 +2,24 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Standard record-type folders. These are the defaults Lilac saves into when
+/// no folder is chosen, and they are created under `<records_root>/Records`.
+pub const DEFAULT_REGISTERED_FOLDERS: &[&str] = &[
+    "page",
+    "collection",
+    "bookmark",
+    "snapshot",
+    "note",
+    "snippet",
+];
+
+pub fn default_registered_folders() -> Vec<String> {
+    DEFAULT_REGISTERED_FOLDERS
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -62,15 +80,101 @@ pub fn default_records_root() -> PathBuf {
     home_dir().join("Documents").join("Lilac")
 }
 
+/// Strip a UTF-8 BOM and normalise line endings before handing text to YAML.
+/// PowerShell's `Set-Content -Encoding UTF8` writes a BOM, which serde_yaml
+/// does not accept at the start of a document.
+fn clean_yaml(raw: &str) -> String {
+    raw.trim_start_matches('\u{feff}')
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+}
+
+/// Read the last scalar value for `key`. Used only to salvage a config that is
+/// not valid YAML (for example a file concatenated by an old installer).
+fn yaml_scalar_after(text: &str, key: &str) -> Option<String> {
+    let mut search = 0;
+    let mut last = None;
+    while let Some(pos) = text[search..].find(key) {
+        let key_start = search + pos;
+        let before = text[..key_start].chars().next_back();
+        let is_word_start = before
+            .map(|c| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(true);
+        let after_key = key_start + key.len();
+        if is_word_start {
+            let rest = text[after_key..].trim_start();
+            if let Some(rest) = rest.strip_prefix(':') {
+                let rest = rest.trim_start();
+                let value = if let Some(r) = rest.strip_prefix('"') {
+                    r.find('"').map(|end| r[..end].to_string())
+                } else if let Some(r) = rest.strip_prefix('\'') {
+                    r.find('\'').map(|end| r[..end].replace("''", "'"))
+                } else {
+                    let end = rest
+                        .find(|c: char| c == '\n' || c == '\r' || c.is_whitespace())
+                        .unwrap_or(rest.len());
+                    Some(rest[..end].to_string())
+                };
+                if let Some(value) = value.filter(|v| !v.is_empty()) {
+                    last = Some(value);
+                }
+            }
+        }
+        search = after_key;
+    }
+    last
+}
+
+fn parse_config(raw: &str) -> (Config, bool) {
+    let text = clean_yaml(raw);
+    match serde_yaml::from_str::<Config>(&text) {
+        Ok(cfg) => (cfg, true),
+        Err(_) => {
+            let cfg = Config {
+                records_root: yaml_scalar_after(&text, "records_root"),
+                ..Config::default()
+            };
+            (cfg, false)
+        }
+    }
+}
+
+/// Create the standard `<records_root>/Records/<folder>` directories. Entries
+/// that are absolute or contain `..` are ignored so a config value can never
+/// escape the records root.
+fn ensure_record_folders(records_root: &Path, folders: &[String]) {
+    let records = records_root.join("Records");
+    let _ = fs::create_dir_all(&records);
+    for folder in folders {
+        let p = Path::new(folder);
+        if p.is_absolute()
+            || p.components().any(|c| {
+                matches!(
+                    c,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            continue;
+        }
+        let _ = fs::create_dir_all(records.join(p));
+    }
+}
+
 pub fn load_orchid_config() -> OrchidConfig {
     let root = orchid_config_root();
     let _ = fs::create_dir_all(&root);
     let path = root.join("config.yaml");
     if path.exists() {
-        fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_yaml::from_str(&s).ok())
-            .unwrap_or_default()
+        let raw = fs::read_to_string(&path).unwrap_or_default();
+        let text = clean_yaml(&raw);
+        serde_yaml::from_str(&text).unwrap_or_else(|_| OrchidConfig {
+            version: 1,
+            registered_folders: Vec::new(),
+            extension_id: yaml_scalar_after(&text, "extension_id"),
+        })
     } else {
         OrchidConfig::default()
     }
@@ -114,17 +218,30 @@ pub fn load_config() -> (Config, PathBuf) {
     let _ = fs::create_dir_all(&root);
     migrate_legacy(&root);
     let path = root.join("config.yaml");
-    let mut cfg: Config = if path.exists() {
-        fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_yaml::from_str(&s).ok())
-            .unwrap_or_default()
+    let raw = if path.exists() {
+        fs::read_to_string(&path).unwrap_or_default()
     } else {
-        Config::default()
+        String::new()
     };
-    // pull registered folders from orchid config if lilac's is empty
-    if cfg.registered_folders.is_empty() {
+    let normalised = clean_yaml(&raw);
+    let had_folders_key = normalised.contains("registered_folders");
+    let (mut cfg, parsed) = parse_config(&raw);
+    if cfg.version == 0 {
+        cfg.version = 1;
+    }
+    // Standard folders are defaults, not a hidden fallback: Lilac and Orchid
+    // both need concrete destinations. An explicit empty list is respected.
+    if cfg.registered_folders.is_empty() && (!had_folders_key || !parsed) {
         cfg.registered_folders = load_orchid_config().registered_folders;
+        if cfg.registered_folders.is_empty() {
+            cfg.registered_folders = default_registered_folders();
+        }
+    }
+    if !parsed && !normalised.is_empty() {
+        // Repair the file once so the next start is clean. Do this after the
+        // defaults are resolved, otherwise the repaired file would pin an
+        // empty folder list.
+        let _ = save_config(&cfg);
     }
     // ensure records root
     let records_root = cfg
@@ -133,6 +250,7 @@ pub fn load_config() -> (Config, PathBuf) {
         .map(PathBuf::from)
         .unwrap_or_else(default_records_root);
     let _ = fs::create_dir_all(&records_root);
+    ensure_record_folders(&records_root, &cfg.registered_folders);
     (cfg, records_root)
 }
 
@@ -169,3 +287,38 @@ pub fn rules_path() -> PathBuf {
 }
 
 pub fn _ensure_parent(_p: &Path) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clean_yaml_strips_bom_and_normalises_newlines() {
+        let raw = "\u{feff}version: 1\r\nrecords_root: C:/tmp\r\n";
+        assert_eq!(clean_yaml(raw), "version: 1\nrecords_root: C:/tmp\n");
+    }
+
+    #[test]
+    fn parse_accepts_bom() {
+        let raw = "\u{feff}version: 1\nrecords_root: C:/tmp/lilac\n";
+        let (cfg, parsed) = parse_config(raw);
+        assert!(parsed);
+        assert_eq!(cfg.records_root.as_deref(), Some("C:/tmp/lilac"));
+    }
+
+    #[test]
+    fn salvage_concatenated_config_takes_last_value() {
+        // The shape produced by the old installer bug: no newlines at all.
+        let raw = "version: 1records_root: \"C:/old\"records_root: \"C:/new/lilac\"";
+        let (cfg, parsed) = parse_config(raw);
+        assert!(!parsed);
+        assert_eq!(cfg.records_root.as_deref(), Some("C:/new/lilac"));
+    }
+
+    #[test]
+    fn default_folders_are_the_record_types() {
+        let folders = default_registered_folders();
+        assert!(folders.iter().any(|f| f == "page"));
+        assert!(folders.iter().any(|f| f == "note"));
+    }
+}

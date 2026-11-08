@@ -15,6 +15,9 @@ Set-Location $root
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
+Write-Host "Generating application icon..."
+& (Join-Path $PSScriptRoot "make-icon.ps1")
+
 Write-Host "Zipping extension..."
 $ext = Join-Path $root "extension"
 $zip = Join-Path $OutDir "lilac-extension.zip"

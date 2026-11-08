@@ -1,6 +1,56 @@
-use lilac_core::{apply_block_edit, parse_blocks, read_record, rebuild_index, search_records, write_record, Record};
+use lilac_core::session::{OpenReport, RecordSession};
+use lilac_core::{read_record, rebuild_index, search_records, Record, Wal};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+/// Open editor sessions, one per record id. A session owns the record text and
+/// its WAL while the editor is open, so every edit is a surgical block replace
+/// verified against the file version on disk.
+#[derive(Default)]
+struct Sessions(Mutex<HashMap<String, RecordSession>>);
+
+fn wal_path_for(id: &str) -> PathBuf {
+    let safe: String = id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    lilac_host::config::config_root()
+        .join("wal")
+        .join(format!("{}.log", safe))
+}
+
+/// Return the live session for `id`, opening it (and replaying any WAL) when
+/// there is none yet or when the record moved to a different file.
+fn ensure_session<'a>(
+    map: &'a mut HashMap<String, RecordSession>,
+    id: &str,
+    path: &Path,
+) -> Result<(&'a mut RecordSession, Option<OpenReport>), String> {
+    let needs_open = map.get(id).map(|s| s.path() != path).unwrap_or(true);
+    if needs_open {
+        let (session, report) =
+            RecordSession::open(path, Wal::new(wal_path_for(id))).map_err(|e| e.to_string())?;
+        map.insert(id.to_string(), session);
+        return Ok((map.get_mut(id).expect("just inserted"), Some(report)));
+    }
+    Ok((map.get_mut(id).expect("present"), None))
+}
+
+fn session_view(
+    session: &RecordSession,
+    report: Option<&OpenReport>,
+    external_changed: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "blocks": session.blocks(),
+        "body": session.body(),
+        "recovered_edits": report.map(|r| r.recovered_edits).unwrap_or(0),
+        "orphaned_wal": report.and_then(|r| r.orphaned_wal.as_ref()).map(|p| p.to_string_lossy().to_string()),
+        "external_changed": external_changed,
+    })
+}
 
 #[derive(Serialize)]
 struct RecordView {
@@ -87,6 +137,25 @@ fn find_record_file(dir: &std::path::Path, id: &str) -> Option<PathBuf> {
 #[tauri::command]
 fn get_block_types() -> serde_json::Value {
     lilac_core::block_types::describe()
+}
+
+#[tauri::command]
+fn open_folder(which: String) -> Result<String, String> {
+    let root = records_root();
+    let path = match which.as_str() {
+        "root" => root,
+        "records" => root.join("Records"),
+        "config" => lilac_host::config::config_root(),
+        _ => return Err(format!("unknown folder: {}", which)),
+    };
+    std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("explorer").arg(&path).spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(&path).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+    Ok(path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -195,39 +264,69 @@ fn dirs_local_app_data() -> std::path::PathBuf {
 }
 
 #[tauri::command]
-fn get_blocks(id: String) -> Result<String, String> {
+fn get_blocks(state: tauri::State<Sessions>, id: String) -> Result<String, String> {
     let root = records_root();
     let path = find_record_file(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
-    let (_rec, body) = read_record(&path).map_err(|e| e.to_string())?;
-    let body = body.unwrap_or_default();
-    let blocks = parse_blocks(&body);
-    Ok(serde_json::to_string(&blocks).unwrap_or_default())
+    let mut map = state.0.lock().map_err(|_| "session lock poisoned".to_string())?;
+    let (session, report) = ensure_session(&mut map, &id, &path)?;
+    // Pick up edits made by another program (or the browser host) while open.
+    let external_changed = session.refresh_external().map_err(|e| e.to_string())?;
+    Ok(session_view(session, report.as_ref(), external_changed).to_string())
 }
 
 #[tauri::command]
-fn apply_block_edit_cmd(id: String, block_id: String, new_content: String) -> Result<String, String> {
+fn apply_block_edit_cmd(
+    state: tauri::State<Sessions>,
+    id: String,
+    block_path: Vec<usize>,
+    new_content: String,
+    expected_content: Option<String>,
+) -> Result<String, String> {
     let root = records_root();
     let path = find_record_file(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
-    let (mut rec, body) = read_record(&path).map_err(|e| e.to_string())?;
-    let body = body.unwrap_or_default();
-    let new_body = apply_block_edit(&body, &block_id, &new_content)?;
-    rec.modified = Some(chrono::Utc::now().to_rfc3339());
-    write_record(&path, &rec, Some(&new_body)).map_err(|e| e.to_string())?;
-    Ok(new_body)
+    let mut map = state.0.lock().map_err(|_| "session lock poisoned".to_string())?;
+    let (session, _report) = ensure_session(&mut map, &id, &path)?;
+    let mut external_changed = session.refresh_external().map_err(|e| e.to_string())?;
+    // The block path is positional: if the file changed on disk, the same path
+    // may now point at a different block. Refuse rather than overwrite it.
+    if let Some(expected) = expected_content {
+        let current = lilac_core::block_at_path(session.blocks(), &block_path)
+            .map(|b| b.content.as_str());
+        if current != Some(expected.as_str()) {
+            return Err("this block changed on disk; reopen the record before editing".into());
+        }
+    }
+    external_changed |= session
+        .edit_at_path(&block_path, &new_content)
+        .map_err(|e| e.to_string())?;
+    Ok(session_view(session, None, external_changed).to_string())
+}
+
+#[tauri::command]
+fn undo_block_edit_cmd(state: tauri::State<Sessions>, id: String) -> Result<String, String> {
+    let root = records_root();
+    let path = find_record_file(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
+    let mut map = state.0.lock().map_err(|_| "session lock poisoned".to_string())?;
+    let (session, _report) = ensure_session(&mut map, &id, &path)?;
+    session.undo().map_err(|e| e.to_string())?;
+    Ok(session_view(session, None, false).to_string())
 }
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(Sessions::default())
         .invoke_handler(tauri::generate_handler![
             list_records,
             search,
             load_record,
             get_blocks,
             apply_block_edit_cmd,
+            undo_block_edit_cmd,
             records_root_path,
             register_native_host,
             get_block_types,
             get_settings,
+            open_folder,
             set_registered_folders_cmd,
             set_records_root_cmd
         ])

@@ -10,7 +10,10 @@
     "frontendDist": "../dist"
   },
   "bundle": {
-    "active": false
+    "active": false,
+    "icon": [
+      "icons/icon.ico"
+    ]
   },
   "app": {
     "withGlobalTauri": true,

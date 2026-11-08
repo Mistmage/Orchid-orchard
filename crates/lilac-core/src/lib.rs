@@ -8,12 +8,14 @@ pub mod error;
 pub mod naming;
 pub mod record;
 pub mod rules;
+pub mod session;
 pub mod storage;
 pub mod wal;
 
 pub use block::{
-    Block, BlockKind, apply_block_edit, apply_block_edits, block_hash, find_block, parse_blocks,
-    reconcile_blocks, reconcile_text, splice_block, validate_tree,
+    Block, BlockKind, apply_block_edit, apply_block_edit_at_path, apply_block_edits, block_at_path,
+    block_hash, find_block, parse_blocks, reconcile_blocks, reconcile_text, splice_block,
+    validate_tree,
 };
 pub use block_types::{
     BLOCK_TYPES, BlockTypeDef, IdPolicy, MetaField, MetaKind, Nesting, Syntax, classify_line,
@@ -26,6 +28,7 @@ pub use error::Error;
 pub use naming::{NamingConfig, NamingRule};
 pub use record::Record;
 pub use rules::{Action, Condition, Rule, RuleSet, Value, apply_rules, parse_rules};
+pub use session::{OpenReport, RecordSession, fingerprint};
 pub use storage::{
     Index, IndexEntry, delete_record, read_record, read_record_with_mtime, rebuild_index,
     record_filename, record_path, records_dir, search_records, slugify_title, write_record,
