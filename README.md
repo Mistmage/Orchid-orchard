@@ -205,6 +205,9 @@ like `Archive/2026` are fine, blank means the type's own folder — and press
 explicit folder equal to the type folder is dropped. Invalid targets such as
 `../outside` are refused before any file moves.
 
+`Undo` and `Redo` walk the block edit history; a new edit starts a new branch and
+clears the redo path.
+
 The `Metadata` panel in an open record edits title, status, URL, tags and
 description. It writes only frontmatter and refuses a save when the file changed
 since the panel loaded, so it cannot silently overwrite a block edit or another

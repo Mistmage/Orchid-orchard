@@ -42,10 +42,22 @@ wrong block.
 4. A `begin` entry with the base fingerprint and an `edit` entry with the path
    and content go to the WAL and are flushed.
 5. The record is written; the fingerprint is refreshed and the WAL is truncated.
-6. The previous body is pushed onto an in-memory undo stack (64 entries).
+6. The previous body is pushed onto an in-memory undo stack (64 entries) and the
+   redo stack is cleared.
 
 If the write fails, the session restores the previous body and clears the WAL.
 If the process dies between steps 4 and 5, the next open replays the edit.
+
+## Undo and redo
+
+Undo and redo move through the same in-memory list of bodies. Undo pops the
+previous body, writes it, and pushes the body it replaced onto the redo stack;
+redo pops that stack and pushes the current body back onto the undo stack. Both
+check the file fingerprint first, so an undo or redo after an external change is
+refused rather than silently overwriting it. A new edit, an insert, a delete or
+an external refresh clears the redo path: once history branches, the old redo
+text no longer follows from the file. Metadata saves change the frontmatter but
+leave both stacks alone, because they do not touch the body.
 
 ## Insert and delete
 
@@ -98,8 +110,9 @@ Metadata writes update `modified`; they are not on the block undo stack.
 
 ## Limits
 
-- Undo is per session and in memory; redo is not implemented. Insert and delete
-  are undoable through the same stack; metadata changes are not.
+- Undo and redo are per session and in memory (64 entries each); they end when
+  the record is closed. Insert and delete share the same stacks; metadata changes
+  are not on them.
 - A WAL is one file per record, not per window. Multiple Orchard windows on the
   same record are not coordinated yet.
 - Frontmatter fields outside the five edited ones are preserved but not exposed

@@ -475,6 +475,14 @@ fn undo_block_edit_cmd(state: tauri::State<Sessions>, id: String) -> Result<Stri
     Ok(session_view(session, None, false).to_string())
 }
 
+#[tauri::command]
+fn redo_block_edit_cmd(state: tauri::State<Sessions>, id: String) -> Result<String, String> {
+    let mut map = state.0.lock().map_err(|_| "session lock poisoned".to_string())?;
+    let (session, _report) = ensure_open(&mut map, &id)?;
+    session.redo().map_err(|e| e.to_string())?;
+    Ok(session_view(session, None, false).to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(Sessions::default())
@@ -489,6 +497,7 @@ pub fn run() {
             move_records_cmd,
             update_record_fields_cmd,
             undo_block_edit_cmd,
+            redo_block_edit_cmd,
             records_root_path,
             register_native_host,
             get_block_types,

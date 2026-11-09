@@ -41,6 +41,7 @@ pub struct RecordSession {
     wal: Wal,
     base_fingerprint: u64,
     history: Vec<String>,
+    redo: Vec<String>,
     max_history: usize,
     recovered_edits: usize,
     orphaned_wal: Option<PathBuf>,
@@ -60,6 +61,7 @@ impl RecordSession {
             wal,
             base_fingerprint: fingerprint(raw.as_bytes()),
             history: Vec::new(),
+            redo: Vec::new(),
             max_history: 64,
             recovered_edits: 0,
             orphaned_wal: None,
@@ -185,6 +187,7 @@ impl RecordSession {
         self.blocks = new_blocks;
         self.base_fingerprint = current;
         self.history.clear();
+        self.redo.clear();
         Ok(true)
     }
 
@@ -315,20 +318,54 @@ impl RecordSession {
         self.base_fingerprint = self.current_fingerprint()?;
         let _ = self.wal.truncate();
         self.push_history(before);
+        // A new edit starts a new branch; redo would apply obsolete text.
+        self.redo.clear();
         Ok(external_changed)
     }
 
     pub fn undo(&mut self) -> Result<Option<String>, Error> {
-        let Some(previous) = self.history.pop() else {
+        if self.history.is_empty() {
             return Ok(None);
-        };
+        }
         if self.current_fingerprint()? != self.base_fingerprint {
             return Err(Error::Stale(self.path.to_string_lossy().to_string()));
         }
-        self.body = previous;
+        let current = self.body.clone();
+        let previous = self.history.pop().expect("history is non-empty");
+        self.body = previous.clone();
         self.blocks = parse_blocks(&self.body);
         self.record.modified = Some(chrono::Utc::now().to_rfc3339());
-        write_record(&self.path, &self.record, Some(&self.body))?;
+        if let Err(e) = write_record(&self.path, &self.record, Some(&self.body)) {
+            self.body = current;
+            self.blocks = parse_blocks(&self.body);
+            self.history.push(previous);
+            return Err(e);
+        }
+        self.push_redo(current);
+        self.base_fingerprint = self.current_fingerprint()?;
+        Ok(Some(self.body.clone()))
+    }
+
+    /// Re-apply the most recently undone body. A new edit clears the redo stack.
+    pub fn redo(&mut self) -> Result<Option<String>, Error> {
+        if self.redo.is_empty() {
+            return Ok(None);
+        }
+        if self.current_fingerprint()? != self.base_fingerprint {
+            return Err(Error::Stale(self.path.to_string_lossy().to_string()));
+        }
+        let current = self.body.clone();
+        let next = self.redo.pop().expect("redo is non-empty");
+        self.body = next.clone();
+        self.blocks = parse_blocks(&self.body);
+        self.record.modified = Some(chrono::Utc::now().to_rfc3339());
+        if let Err(e) = write_record(&self.path, &self.record, Some(&self.body)) {
+            self.body = current;
+            self.blocks = parse_blocks(&self.body);
+            self.redo.push(next);
+            return Err(e);
+        }
+        self.push_history(current);
         self.base_fingerprint = self.current_fingerprint()?;
         Ok(Some(self.body.clone()))
     }
@@ -342,6 +379,13 @@ impl RecordSession {
             self.history.remove(0);
         }
         self.history.push(text);
+    }
+
+    fn push_redo(&mut self, text: String) {
+        if self.redo.len() >= self.max_history {
+            self.redo.remove(0);
+        }
+        self.redo.push(text);
     }
 }
 
@@ -466,6 +510,38 @@ mod tests {
         session.edit_at_path(&[0], "# Changed\n").unwrap();
         assert!(session.undo().unwrap().is_some());
         assert_eq!(session.body(), original);
+    }
+
+    #[test]
+    fn undo_and_redo_walk_the_same_history() {
+        let dir = TempDir::new().unwrap();
+        let path = record_file(&dir);
+        let wal_path = dir.path().join("wal.log");
+        let (mut session, _) = RecordSession::open(&path, Wal::new(&wal_path)).unwrap();
+        let original = session.body().to_string();
+
+        session.edit_at_path(&[0], "# First\n").unwrap();
+        session.edit_at_path(&[0], "# Second\n").unwrap();
+        assert!(session.body().contains("# Second"));
+
+        session.undo().unwrap();
+        assert!(session.body().contains("# First"));
+        session.undo().unwrap();
+        assert_eq!(session.body(), original);
+
+        session.redo().unwrap();
+        assert!(session.body().contains("# First"));
+        assert!(fs::read_to_string(&path).unwrap().contains("# First"));
+        session.redo().unwrap();
+        assert!(session.body().contains("# Second"));
+        // Nothing left to redo.
+        assert!(session.redo().unwrap().is_none());
+
+        // A fresh edit is a new branch and discards the redo path.
+        session.undo().unwrap();
+        session.edit_at_path(&[0], "# Fresh\n").unwrap();
+        assert!(session.redo().unwrap().is_none());
+        assert!(session.body().contains("# Fresh"));
     }
 
     #[test]

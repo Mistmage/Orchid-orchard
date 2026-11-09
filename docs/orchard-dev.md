@@ -82,7 +82,7 @@ contain `..` are ignored.
 `list_records`, `search`, `load_record`, `get_blocks`,
 `apply_block_edit_cmd`, `insert_block_cmd`, `delete_block_cmd`,
 `move_records_cmd`, `update_record_fields_cmd`, `undo_block_edit_cmd`,
-`records_root_path`,
+`redo_block_edit_cmd`, `records_root_path`,
 `register_native_host`, `get_block_types`, `get_settings`, `open_folder`,
 `set_registered_folders_cmd`, `set_records_root_cmd`, `set_naming_cmd`,
 `preview_naming_cmd`.
@@ -98,8 +98,10 @@ call. `fingerprint` is the FNV-1a version of the whole file, sent as a decimal
 string because a 64-bit value does not fit JavaScript's safe integer range.
 `apply_block_edit_cmd` takes `{ id, blockPath, newContent, expectedContent }`;
 `expectedContent` is the text the editor started from and guards against
-positional paths drifting after an external edit. `undo_block_edit_cmd` takes
-`{ id }` and returns the same view.
+positional paths drifting after an external edit. `undo_block_edit_cmd` and
+`redo_block_edit_cmd` take `{ id }` and return the same view. Redo replays the
+most recently undone body; a new edit or an external change discards the redo
+path, so redo never applies text that no longer follows from the current file.
 
 `insert_block_cmd` takes `{ id, afterPath, content }` and inserts raw Markdown.
 `afterPath: null` appends to the body; a section path inserts after its whole

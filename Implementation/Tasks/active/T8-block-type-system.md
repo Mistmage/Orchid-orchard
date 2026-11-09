@@ -30,13 +30,14 @@ Shipped:
   recursively with rank labels.
 - Record editing is path-addressed (`blockPath`) and runs through
   `RecordSession` (`crates/lilac-core/src/session.rs`): WAL replay, external
-  change reconciliation, undo, and an `expectedContent` guard against positional
-  paths drifting. See `../../Markdown/Design/record-session.md`.
+  change reconciliation, undo/redo, and an `expectedContent` guard against
+  positional paths drifting. See `../../Markdown/Design/record-session.md`.
 - Block creation and deletion are first-class commands: `insert_block_cmd`
   (after a path or appended) and `delete_block_cmd`, both WAL-journaled and
-  undoable. New blocks are composed as raw Markdown from a type select
-  (paragraph, H1–H3, bullet, quote, code, divider), so the file never holds an
-  empty block.
+  undoable. A new edit branches history and discards the redo path, so redo
+  never applies obsolete text. New blocks are composed as raw Markdown from a
+  type select (paragraph, H1–H3, bullet, quote, code, divider), so the file
+  never holds an empty block.
 - The editor paints type-aware surfaces (heading sizes, quote rule, code
   surface, divider, frontmatter, table/math) and shows per-block `+` / `×`
   actions on hover.
@@ -48,11 +49,11 @@ Shipped:
 - Settings is split into Orchid / Storage / Lilac / Block types tabs, with styled
   buttons and inputs.
 
-Verified: 79 core + 10 roundtrip + 5 probe + 4 config tests pass, clippy is
+Verified: 80 core + 10 roundtrip + 5 probe + 4 config tests pass, clippy is
 clean, frontend/Tauri/release builds succeed, and live CDP checks confirm block
 editing, insertion (section/leaf/append/code), deletion of leaves and subtrees,
-stale-delete refusal, undo, the composer UI, WAL replay, and fingerprint-guarded
-metadata saves.
+stale-delete refusal, undo/redo, the composer UI, WAL replay, and
+fingerprint-guarded metadata saves.
 
 Remaining:
 
@@ -62,4 +63,4 @@ Remaining:
   frontmatter only at offset 0).
 - Render each block type with its own leaf component while keeping Rust as the
   authority for structure.
-- Redo, multi-window coordination, and richer per-block-type components.
+- Multi-window coordination and per-block-type leaf components.

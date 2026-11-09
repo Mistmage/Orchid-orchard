@@ -229,6 +229,11 @@ async function undoBlockEdit(id: string): Promise<BlockSessionView> {
   return JSON.parse(json) as BlockSessionView;
 }
 
+async function redoBlockEdit(id: string): Promise<BlockSessionView> {
+  const json = await invoke("redo_block_edit_cmd", { id }) as string;
+  return JSON.parse(json) as BlockSessionView;
+}
+
 async function insertBlock(id: string, afterPath: number[] | null, content: string): Promise<BlockSessionView> {
   const json = await invoke("insert_block_cmd", { id, afterPath, content }) as string;
   return JSON.parse(json) as BlockSessionView;
@@ -669,6 +674,17 @@ export default function App() {
     }
   }
 
+  async function redo(id: string) {
+    try {
+      const view = await redoBlockEdit(id);
+      setBlocks(view.blocks);
+      syncFingerprint(view);
+      setBlockNotice("Redid the undone edit.");
+    } catch (e) {
+      setBlockNotice("Redo failed: " + String(e));
+    }
+  }
+
   async function reloadBlocks(id: string) {
     try {
       const view = await fetchBlocks(id);
@@ -1058,6 +1074,7 @@ export default function App() {
                 <div class="blocks" style={{ "margin-top": "8px", cursor: "default" }} onClick={(e) => e.stopPropagation()}>
                   <div class="row" style={{ "margin-bottom": "6px" }}>
                     <button onClick={(e) => { e.stopPropagation(); undo(r.id); }} title="Undo the last block edit">Undo</button>
+                    <button onClick={(e) => { e.stopPropagation(); redo(r.id); }} title="Redo the last undone block edit">Redo</button>
                     <button onClick={(e) => { e.stopPropagation(); openComposer(null); }} title="Add a block at the end of the body">Add block</button>
                     <button onClick={(e) => { e.stopPropagation(); startMove(r.id, r.folder); }} title="Move this record to another folder under Records/">Move…</button>
                     <Show when={blockNotice()}>
