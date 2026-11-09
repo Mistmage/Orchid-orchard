@@ -102,6 +102,34 @@
     .block-node.indent-on > .block-children { padding-left: 18px; border-left: 1px solid var(--surface-2); }
     .block-label { font-size: 11px; color: var(--muted); margin-bottom: 2px; display: flex; gap: 6px; align-items: center; }
     .block-label b { color: var(--text); font-weight: 600; }
+    .block-actions { margin-left: auto; display: flex; gap: 3px; opacity: 0; transition: opacity 120ms; }
+    .block-node:hover > .block-body > .block-label .block-actions,
+    .block-node:focus-within > .block-body > .block-label .block-actions { opacity: 1; }
+    button.mini { padding: 1px 7px; font-size: 12px; line-height: 1.3; border-radius: 5px; }
+    .composer { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 8px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; background: color-mix(in srgb, var(--panel) 70%, transparent); }
+    .composer input { flex: 1 1 220px; }
+    .cm-block { background: var(--surface); border-radius: 4px; padding: 4px; min-height: 34px; }
+    .cm-block:focus-within { outline: 1px solid color-mix(in srgb, var(--accent) 65%, transparent); outline-offset: 1px; }
+    .cm-block .cm-editor { background: transparent; }
+    .cm-block .cm-content { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; padding: 2px 0; }
+    /* Type-aware surfaces: the raw Markdown stays editable, but the shape of
+       the block is visible while writing. */
+    .block-body.kind-h1 .cm-block,
+    .block-body.kind-h2 .cm-block,
+    .block-body.kind-h3 .cm-block { background: transparent; padding: 2px 0; }
+    .block-body.kind-h1 .cm-content { font-size: 21px; font-weight: 700; }
+    .block-body.kind-h2 .cm-content { font-size: 17px; font-weight: 700; }
+    .block-body.kind-h3 .cm-content { font-size: 15px; font-weight: 600; }
+    .block-body.kind-quote .cm-block { background: transparent; border-left: 3px solid var(--accent-2); border-radius: 0; padding-left: 8px; }
+    .block-body.kind-quote .cm-content { font-style: italic; color: var(--muted); }
+    .block-body.kind-code .cm-block { background: #11111b; }
+    .block-body.kind-code .cm-content { color: #a6e3a1; }
+    .block-body.kind-frontmatter .cm-block { background: transparent; }
+    .block-body.kind-frontmatter .cm-content { font-size: 12px; color: var(--muted); }
+    .block-body.kind-divider .cm-block { background: transparent; min-height: 22px; }
+    .block-body.kind-divider .cm-content { color: var(--muted); text-align: center; }
+    .block-body.kind-table .cm-content,
+    .block-body.kind-math .cm-content { font-family: ui-monospace, monospace; }
     @media (prefers-color-scheme: light) {
       :root {
         color-scheme: light;
@@ -115,6 +143,8 @@
       .blkedit { background: var(--surface); color: var(--text); border-color: var(--border); }
       button { background: var(--surface); color: var(--text); border-color: var(--border); }
       button:hover { background: var(--surface-2); }
+      .block-body.kind-code .cm-block { background: #e6e9ef; }
+      .block-body.kind-code .cm-content { color: #40a02b; }
     }
   </style>
 </head>

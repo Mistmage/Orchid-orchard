@@ -329,6 +329,50 @@ fn apply_block_edit_cmd(
 }
 
 #[tauri::command]
+fn insert_block_cmd(
+    state: tauri::State<Sessions>,
+    id: String,
+    after_path: Option<Vec<usize>>,
+    content: String,
+) -> Result<String, String> {
+    let root = records_root();
+    let path = find_record_file(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
+    let mut map = state.0.lock().map_err(|_| "session lock poisoned".to_string())?;
+    let (session, _report) = ensure_session(&mut map, &id, &path)?;
+    let external_changed = session
+        .insert_block(after_path.as_deref(), &content)
+        .map_err(|e| e.to_string())?;
+    Ok(session_view(session, None, external_changed).to_string())
+}
+
+#[tauri::command]
+fn delete_block_cmd(
+    state: tauri::State<Sessions>,
+    id: String,
+    block_path: Vec<usize>,
+    expected_content: Option<String>,
+) -> Result<String, String> {
+    let root = records_root();
+    let path = find_record_file(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
+    let mut map = state.0.lock().map_err(|_| "session lock poisoned".to_string())?;
+    let (session, _report) = ensure_session(&mut map, &id, &path)?;
+    let external_changed = session.refresh_external().map_err(|e| e.to_string())?;
+    // Same positional-path guard as edits: never delete a block that changed.
+    if let Some(expected) = expected_content {
+        let current =
+            lilac_core::block_at_path(session.blocks(), &block_path).map(|b| b.content.as_str());
+        if current != Some(expected.as_str()) {
+            return Err("this block changed on disk; reopen the record before deleting".into());
+        }
+    }
+    let external_changed = external_changed
+        | session
+            .delete_block(&block_path)
+            .map_err(|e| e.to_string())?;
+    Ok(session_view(session, None, external_changed).to_string())
+}
+
+#[tauri::command]
 fn undo_block_edit_cmd(state: tauri::State<Sessions>, id: String) -> Result<String, String> {
     let root = records_root();
     let path = find_record_file(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
@@ -347,6 +391,8 @@ pub fn run() {
             load_record,
             get_blocks,
             apply_block_edit_cmd,
+            insert_block_cmd,
+            delete_block_cmd,
             undo_block_edit_cmd,
             records_root_path,
             register_native_host,

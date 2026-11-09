@@ -13,9 +13,9 @@ pub mod storage;
 pub mod wal;
 
 pub use block::{
-    Block, BlockKind, apply_block_edit, apply_block_edit_at_path, apply_block_edits, block_at_path,
-    block_hash, find_block, parse_blocks, reconcile_blocks, reconcile_text, splice_block,
-    validate_tree,
+    Block, BlockKind, append_block, apply_block_edit, apply_block_edit_at_path, apply_block_edits,
+    block_at_path, block_hash, delete_at_path, find_block, insert_after_path, parse_blocks,
+    reconcile_blocks, reconcile_text, splice_block, subtree_end, validate_tree,
 };
 pub use block_types::{
     BLOCK_TYPES, BlockTypeDef, IdPolicy, MetaField, MetaKind, Nesting, Syntax, classify_line,

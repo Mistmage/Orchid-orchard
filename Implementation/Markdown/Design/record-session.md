@@ -47,6 +47,28 @@ wrong block.
 If the write fails, the session restores the previous body and clears the WAL.
 If the process dies between steps 4 and 5, the next open replays the edit.
 
+## Insert and delete
+
+New blocks are raw Markdown, never empty placeholders: the file never contains a
+draft line, so a crash cannot lose structure and the parser has nothing to
+guess. `insert_after_path()` finds the end of the target's subtree and splices
+the text there, so the new block lands after the section rather than in its
+first child slot. The declared ranks then decide the final level: a deeper
+heading remains inside the section, an equal or shallower one becomes a
+sibling. `append_block()` does the same at end of body. Both keep a blank line
+between blocks and leave the rest of the file byte-identical.
+
+`delete_at_path()` removes the block span together with its children in one
+splice. Deletes use the same positional path plus `expectedContent` guard as
+edits, so deleting a block that changed on disk is refused rather than applied
+to the wrong text.
+
+WAL entries are `insert` (path of the anchor plus content) and `delete` (path).
+If any replay step fails (for example, the anchor path no longer exists), the
+session restores the body it read before replay and discards the whole WAL, so a
+half-applied sequence never corrupts the document. Insert and delete each push
+the previous body onto the undo stack like an edit.
+
 ## Opening and WAL safety
 
 `RecordSession::open()` reads the file, fingerprints it, and replays WAL entries
@@ -67,7 +89,8 @@ stable references survive a rewrite by another process.
 
 ## Limits
 
-- Undo is per session and in memory; redo is not implemented.
+- Undo is per session and in memory; redo is not implemented. Insert and delete
+  are undoable through the same stack.
 - A WAL is one file per record, not per window. Multiple Orchard windows on the
   same record are not coordinated yet.
 - Frontmatter is not part of the body session; metadata editing is a separate

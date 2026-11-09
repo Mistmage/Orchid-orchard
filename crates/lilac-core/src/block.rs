@@ -191,6 +191,99 @@ pub fn splice_block(text: &str, block: &Block, new_content: &str) -> String {
     out
 }
 
+/// Last byte of a block and all of its descendants. A section's own span ends
+/// at its heading line, so inserting "after" a section must use this.
+pub fn subtree_end(block: &Block) -> usize {
+    block
+        .children
+        .iter()
+        .fold(block.span.1, |acc, child| acc.max(subtree_end(child)))
+}
+
+/// Insert Markdown after a block (and its whole subtree). The new text is
+/// separated by one blank line; everything before and after stays untouched.
+/// The insertion point is after the subtree, so the parser's rank rules place
+/// the new block at the intended level instead of inside the target's first
+/// child position.
+pub fn insert_after_path(text: &str, path: &[usize], content: &str) -> Result<String, String> {
+    let content = content.trim_end_matches(['\r', '\n']);
+    if content.trim().is_empty() {
+        return Err("refusing to insert an empty block".into());
+    }
+    let blocks = parse_blocks(text);
+    let block =
+        block_at_path(&blocks, path).ok_or_else(|| format!("block path not found: {:?}", path))?;
+    let at = subtree_end(block);
+    if at > text.len() {
+        return Err(format!("invalid span for block path {:?}", path));
+    }
+    // Block spans include the line ending, so the separator before the new
+    // block is one newline when the prefix already ends with one.
+    let before = if at == 0 || text[..at].ends_with('\n') {
+        "\n"
+    } else {
+        "\n\n"
+    };
+    let after = if at == text.len() || text[at..].starts_with('\n') {
+        "\n"
+    } else {
+        ""
+    };
+    let mut out = String::with_capacity(text.len() + content.len() + 3);
+    out.push_str(&text[..at]);
+    out.push_str(before);
+    out.push_str(content);
+    out.push_str(after);
+    out.push_str(&text[at..]);
+    Ok(out)
+}
+
+/// Append Markdown at the end of a body, adding only the separation needed.
+pub fn append_block(text: &str, content: &str) -> Result<String, String> {
+    let content = content.trim_end_matches(['\r', '\n']);
+    if content.trim().is_empty() {
+        return Err("refusing to insert an empty block".into());
+    }
+    if text.trim().is_empty() {
+        return Ok(format!("{}\n", content));
+    }
+    let mut out = text.to_string();
+    if !out.is_empty() {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        if !out.ends_with("\n\n") {
+            out.push('\n');
+        }
+    }
+    out.push_str(content);
+    out.push('\n');
+    Ok(out)
+}
+
+/// Delete a block and its subtree. The line ending and a redundant blank line
+/// are removed so repeated deletes do not leave growing gaps.
+pub fn delete_at_path(text: &str, path: &[usize]) -> Result<String, String> {
+    let blocks = parse_blocks(text);
+    let block =
+        block_at_path(&blocks, path).ok_or_else(|| format!("block path not found: {:?}", path))?;
+    let start = block.span.0;
+    let mut end = subtree_end(block);
+    if start > end || end > text.len() {
+        return Err(format!("invalid span for block path {:?}", path));
+    }
+    if text.as_bytes().get(end) == Some(&b'\n') {
+        end += 1;
+    }
+    if start > 0 && text[..start].ends_with('\n') && text[end..].starts_with('\n') {
+        end += 1;
+    }
+    let mut out = String::with_capacity(text.len());
+    out.push_str(&text[..start]);
+    out.push_str(&text[end..]);
+    Ok(out)
+}
+
 /// Parse `new` text and reconcile against `old` text's block tree,
 /// preserving IDs where content matches. Returns the reconciled new tree.
 pub fn reconcile_text(old: &str, new: &str) -> Vec<Block> {
@@ -853,6 +946,57 @@ mod tests {
         let mut b = parse_blocks(text)[0].clone();
         b.span = (100, 200);
         assert_eq!(splice_block(text, &b, "x"), text);
+    }
+
+    #[test]
+    fn insert_after_leaf_preserves_rest() {
+        let text = "# Hi\n\npara\n\n# Next\n";
+        let out = insert_after_path(text, &[0, 0], "added").unwrap();
+        assert_eq!(out, "# Hi\n\npara\n\nadded\n\n# Next\n");
+    }
+
+    #[test]
+    fn insert_after_section_skips_its_children() {
+        let text = "# A\n\nchild\n\n# B\n";
+        // Inserting after the section must land after `child`, not between
+        // the heading and its child.
+        let out = insert_after_path(text, &[0, 0], "added").unwrap();
+        assert_eq!(out, "# A\n\nchild\n\nadded\n\n# B\n");
+        let blocks = parse_blocks(&out);
+        assert_eq!(blocks[0].children.len(), 2);
+    }
+
+    #[test]
+    fn append_to_empty_body() {
+        assert_eq!(append_block("", "# Hi").unwrap(), "# Hi\n");
+        assert_eq!(append_block("\n", "para").unwrap(), "para\n");
+        assert_eq!(append_block("# A\n\nb\n", "c").unwrap(), "# A\n\nb\n\nc\n");
+    }
+
+    #[test]
+    fn insert_rejects_empty_content() {
+        assert!(insert_after_path("# A\n", &[0], "  \n").is_err());
+        assert!(append_block("", "\n").is_err());
+    }
+
+    #[test]
+    fn delete_leaf_collapses_blank_line() {
+        let text = "# A\n\npara\n\n# B\n";
+        let out = delete_at_path(text, &[0, 0]).unwrap();
+        assert_eq!(out, "# A\n\n# B\n");
+    }
+
+    #[test]
+    fn delete_section_removes_subtree() {
+        let text = "# A\n\na-child\n\n## A2\n\na2-child\n\n# B\n\nb-child\n";
+        let out = delete_at_path(text, &[0]).unwrap();
+        assert_eq!(out, "# B\n\nb-child\n");
+    }
+
+    #[test]
+    fn delete_only_block_leaves_empty_body() {
+        let out = delete_at_path("# A\n", &[0]).unwrap();
+        assert_eq!(out, "");
     }
 
     #[test]

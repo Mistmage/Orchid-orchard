@@ -32,15 +32,23 @@ Shipped:
   `RecordSession` (`crates/lilac-core/src/session.rs`): WAL replay, external
   change reconciliation, undo, and an `expectedContent` guard against positional
   paths drifting. See `../../Markdown/Design/record-session.md`.
+- Block creation and deletion are first-class commands: `insert_block_cmd`
+  (after a path or appended) and `delete_block_cmd`, both WAL-journaled and
+  undoable. New blocks are composed as raw Markdown from a type select
+  (paragraph, H1–H3, bullet, quote, code, divider), so the file never holds an
+  empty block.
+- The editor paints type-aware surfaces (heading sizes, quote rule, code
+  surface, divider, frontmatter, table/math) and shows per-block `+` / `×`
+  actions on hover.
 - The record view has a user-toggleable hierarchy indent (default on); with it
   off, all blocks share the same left edge and hierarchy stays internal.
 - Settings is split into Orchid / Storage / Lilac / Block types tabs, with styled
   buttons and inputs.
 
-Verified: 58 core + 10 roundtrip + 5 probe + 4 config tests pass, clippy is
+Verified: 72 core + 10 roundtrip + 5 probe + 4 config tests pass, clippy is
 clean, frontend/Tauri/release builds succeed, and live CDP checks confirm block
-editing, external-change refusal, undo, WAL replay, config repair and folder
-creation.
+editing, insertion (section/leaf/append/code), deletion of leaves and subtrees,
+stale-delete refusal, undo, the composer UI, and WAL replay.
 
 Remaining:
 
@@ -50,3 +58,5 @@ Remaining:
   frontmatter only at offset 0).
 - Render each block type with its own leaf component while keeping Rust as the
   authority for structure.
+- Redo, multi-window coordination, and frontmatter/metadata editing in the
+  session surface.

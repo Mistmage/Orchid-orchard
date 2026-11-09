@@ -14,7 +14,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::block::{Block, apply_block_edit_at_path, parse_blocks, reconcile_blocks};
+use crate::block::{
+    Block, append_block, apply_block_edit_at_path, delete_at_path, insert_after_path, parse_blocks,
+    reconcile_blocks,
+};
 use crate::error::Error;
 use crate::record::Record;
 use crate::storage::{read_record, write_record};
@@ -114,30 +117,34 @@ impl RecordSession {
         let original = self.body.clone();
         let mut recovered = 0usize;
         for entry in &entries {
-            if entry.op != "edit" {
-                continue;
-            }
-            let path = path_from_payload(&entry.payload);
             let content = entry
                 .payload
                 .get("new_content")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            match path {
-                Some(path) if !path.is_empty() => {
-                    match apply_block_edit_at_path(&self.body, &path, content) {
-                        Ok(next) => {
-                            self.body = next;
-                            recovered += 1;
-                        }
-                        Err(_) => {
-                            self.body = original;
-                            recovered = 0;
-                            break;
-                        }
+            let next = match entry.op.as_str() {
+                "edit" => match path_from_payload(&entry.payload) {
+                    Some(path) if !path.is_empty() => {
+                        apply_block_edit_at_path(&self.body, &path, content)
                     }
+                    _ => Err("edit without path".to_string()),
+                },
+                "insert" => match path_from_payload(&entry.payload) {
+                    Some(path) if !path.is_empty() => insert_after_path(&self.body, &path, content),
+                    _ => append_block(&self.body, content),
+                },
+                "delete" => match path_from_payload(&entry.payload) {
+                    Some(path) if !path.is_empty() => delete_at_path(&self.body, &path),
+                    _ => Err("delete without path".to_string()),
+                },
+                _ => continue,
+            };
+            match next {
+                Ok(text) => {
+                    self.body = text;
+                    recovered += 1;
                 }
-                _ => {
+                Err(_) => {
                     self.body = original;
                     recovered = 0;
                     break;
@@ -184,10 +191,7 @@ impl RecordSession {
         let new_body =
             apply_block_edit_at_path(&self.body, path, new_content).map_err(Error::Invalid)?;
 
-        if self.current_fingerprint()? != self.base_fingerprint {
-            return Err(Error::Stale(self.path.to_string_lossy().to_string()));
-        }
-
+        self.check_disk_unchanged()?;
         self.wal.append(
             "begin",
             serde_json::json!({ "base": self.base_fingerprint, "path": path }),
@@ -196,7 +200,66 @@ impl RecordSession {
             "edit",
             serde_json::json!({ "path": path, "new_content": new_content }),
         )?;
+        self.commit(before, new_body, external_changed)
+    }
 
+    /// Insert Markdown after the block at `after`, or at the end when `after` is
+    /// `None`. A section inserts after its whole subtree, so the new block is a
+    /// sibling of the section rather than a new child.
+    pub fn insert_block(&mut self, after: Option<&[usize]>, content: &str) -> Result<bool, Error> {
+        let external_changed = self.refresh_external()?;
+        let before = self.body.clone();
+        let new_body = match after {
+            Some(path) if !path.is_empty() => {
+                insert_after_path(&self.body, path, content).map_err(Error::Invalid)?
+            }
+            _ => append_block(&self.body, content).map_err(Error::Invalid)?,
+        };
+
+        self.check_disk_unchanged()?;
+        self.wal.append(
+            "begin",
+            serde_json::json!({ "base": self.base_fingerprint, "path": after }),
+        )?;
+        self.wal.append(
+            "insert",
+            serde_json::json!({ "path": after, "new_content": content }),
+        )?;
+        self.commit(before, new_body, external_changed)
+    }
+
+    /// Delete the block at `path` and any children it owns.
+    pub fn delete_block(&mut self, path: &[usize]) -> Result<bool, Error> {
+        let external_changed = self.refresh_external()?;
+        let before = self.body.clone();
+        let new_body = delete_at_path(&self.body, path).map_err(Error::Invalid)?;
+
+        self.check_disk_unchanged()?;
+        self.wal.append(
+            "begin",
+            serde_json::json!({ "base": self.base_fingerprint, "path": path }),
+        )?;
+        self.wal
+            .append("delete", serde_json::json!({ "path": path }))?;
+        self.commit(before, new_body, external_changed)
+    }
+
+    fn check_disk_unchanged(&self) -> Result<(), Error> {
+        if self.current_fingerprint()? != self.base_fingerprint {
+            return Err(Error::Stale(self.path.to_string_lossy().to_string()));
+        }
+        Ok(())
+    }
+
+    /// Write a body that has already been prepared and journalled. Restores the
+    /// previous body if the write fails, so the session never claims an edit
+    /// that is not on disk.
+    fn commit(
+        &mut self,
+        before: String,
+        new_body: String,
+        external_changed: bool,
+    ) -> Result<bool, Error> {
         self.body = new_body;
         self.blocks = parse_blocks(&self.body);
         self.record.modified = Some(chrono::Utc::now().to_rfc3339());
@@ -360,5 +423,72 @@ mod tests {
         session.edit_at_path(&[0], "# Changed\n").unwrap();
         assert!(session.undo().unwrap().is_some());
         assert_eq!(session.body(), original);
+    }
+
+    #[test]
+    fn insert_and_delete_persist_and_undo() {
+        let dir = TempDir::new().unwrap();
+        let path = record_file(&dir);
+        let wal_path = dir.path().join("wal.log");
+        let (mut session, _) = RecordSession::open(&path, Wal::new(&wal_path)).unwrap();
+        let original = session.body().to_string();
+
+        session.insert_block(None, "appended").unwrap();
+        assert!(session.body().contains("appended"));
+        assert!(fs::read_to_string(&path).unwrap().contains("appended"));
+
+        let blocks = session.blocks().to_vec();
+        let appended = blocks[0]
+            .children
+            .iter()
+            .position(|b| b.content.contains("appended"))
+            .expect("inserted block");
+        session.delete_block(&[0, appended]).unwrap();
+        assert!(!session.body().contains("appended"));
+
+        session.undo().unwrap();
+        assert!(session.body().contains("appended"));
+        session.undo().unwrap();
+        assert_eq!(session.body(), original);
+    }
+
+    #[test]
+    fn wal_replays_insert_and_delete() {
+        let dir = TempDir::new().unwrap();
+        let path = record_file(&dir);
+        let wal_path = dir.path().join("wal.log");
+        let (session, _) = RecordSession::open(&path, Wal::new(&wal_path)).unwrap();
+        let base = session.base_fingerprint;
+        drop(session);
+
+        let mut wal = Wal::new(&wal_path);
+        wal.append("begin", serde_json::json!({ "base": base, "path": null }))
+            .unwrap();
+        wal.append(
+            "insert",
+            serde_json::json!({ "path": null, "new_content": "recovered" }),
+        )
+        .unwrap();
+        drop(wal);
+
+        let (session, report) = RecordSession::open(&path, Wal::new(&wal_path)).unwrap();
+        assert_eq!(report.recovered_edits, 1);
+        assert!(session.body().contains("recovered"));
+        assert!(fs::read_to_string(&path).unwrap().contains("recovered"));
+
+        // Now a delete journal.
+        let base = session.base_fingerprint;
+        drop(session);
+        let mut wal = Wal::new(&wal_path);
+        wal.append("begin", serde_json::json!({ "base": base, "path": [0] }))
+            .unwrap();
+        wal.append("delete", serde_json::json!({ "path": [0] }))
+            .unwrap();
+        drop(wal);
+
+        let (session, report) = RecordSession::open(&path, Wal::new(&wal_path)).unwrap();
+        assert_eq!(report.recovered_edits, 1);
+        assert!(!session.body().contains("# Hi"));
+        assert!(!fs::read_to_string(&path).unwrap().contains("# Hi"));
     }
 }

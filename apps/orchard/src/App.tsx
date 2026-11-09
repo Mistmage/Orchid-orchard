@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, Index, Show } from "solid-js";
+import { createEffect, createSignal, For, Index, onCleanup, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { EditorView, keymap } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
@@ -200,6 +200,39 @@ async function undoBlockEdit(id: string): Promise<BlockSessionView> {
   return JSON.parse(json) as BlockSessionView;
 }
 
+async function insertBlock(id: string, afterPath: number[] | null, content: string): Promise<BlockSessionView> {
+  const json = await invoke("insert_block_cmd", { id, afterPath, content }) as string;
+  return JSON.parse(json) as BlockSessionView;
+}
+
+async function deleteBlock(id: string, blockPath: number[], expectedContent: string): Promise<BlockSessionView> {
+  const json = await invoke("delete_block_cmd", { id, blockPath, expectedContent }) as string;
+  return JSON.parse(json) as BlockSessionView;
+}
+
+/// CSS class for a block kind, used to style the editor surface like the
+/// Markdown it contains (heading sizes, code, quotes, tables).
+function kindClass(kind: any): string {
+  if (typeof kind === "string") return "kind-" + kind.toLowerCase();
+  if (kind && kind.Heading) return "kind-h" + kind.Heading.level;
+  if (kind && kind.Divider) return "kind-divider";
+  if (kind && kind.CodeBlock) return "kind-code";
+  if (kind && kind.ListItem) return "kind-list";
+  if (kind && kind.Custom) return "kind-custom";
+  return "kind-block";
+}
+
+const ADD_TYPES: { value: string; label: string; prefix: (text: string) => string }[] = [
+  { value: "paragraph", label: "Paragraph", prefix: (t) => t },
+  { value: "h1", label: "Heading 1", prefix: (t) => "# " + t },
+  { value: "h2", label: "Heading 2", prefix: (t) => "## " + t },
+  { value: "h3", label: "Heading 3", prefix: (t) => "### " + t },
+  { value: "bullet", label: "Bullet", prefix: (t) => "- " + t },
+  { value: "quote", label: "Quote", prefix: (t) => "> " + t },
+  { value: "code", label: "Code block", prefix: (t) => "```\n" + t + "\n```" },
+  { value: "divider", label: "Divider", prefix: () => "---" },
+];
+
 /// Structural signature: kinds + child counts. Content edits leave it stable,
 /// so the editor is not rebuilt (and focus is not lost) on every blur-save.
 function blockShape(blocks: Block[]): string {
@@ -240,15 +273,19 @@ function isSectionKind(kind: any): boolean {
   return !!(kind && (kind.Heading || kind.Divider));
 }
 
-function BlockNode(props: { b: Block; recordId: string; path: number[]; depth: number; indent: boolean; onSaved: (view: BlockSessionView) => void; onError: (message: string) => void }) {
+function BlockNode(props: { b: Block; recordId: string; path: number[]; depth: number; indent: boolean; onSaved: (view: BlockSessionView) => void; onError: (message: string) => void; onInsertAfter: (path: number[]) => void; onDelete: (path: number[], content: string) => void }) {
   const section = isSectionKind(props.b.kind);
   return (
     <div class={"block-node " + (section ? "section " : "leaf ") + (props.indent ? "indent-on" : "")}>
-      <div class="block-body">
+      <div class={"block-body " + kindClass(props.b.kind)}>
         <div class="block-label">
           <b>{kindLabel(props.b.kind)}</b>
           <span>rank {kindRank(props.b.kind)}</span>
           <Show when={props.depth > 0}><span>depth {props.depth}</span></Show>
+          <span class="block-actions">
+            <button class="mini" title="Insert a block after this one" onClick={(e) => { e.stopPropagation(); props.onInsertAfter(props.path); }}>+</button>
+            <button class="mini danger" title="Delete this block" onClick={(e) => { e.stopPropagation(); props.onDelete(props.path, props.b.content || ""); }}>×</button>
+          </span>
         </div>
         <CodeMirrorBlock
           initial={props.b.content || ""}
@@ -273,6 +310,8 @@ function BlockNode(props: { b: Block; recordId: string; path: number[]; depth: n
                 indent={props.indent}
                 onSaved={props.onSaved}
                 onError={props.onError}
+                onInsertAfter={props.onInsertAfter}
+                onDelete={props.onDelete}
               />
             )}
           </For>
@@ -293,6 +332,11 @@ function CodeMirrorBlock(props: { initial: string; onSave: (v: string, expected:
     EditorView.lineWrapping,
   ];
 
+  onCleanup(() => {
+    view?.destroy();
+    view = undefined;
+  });
+
   // mount on mount
   // eslint-disable-next-line solid/reactivity
   setTimeout(() => {
@@ -308,7 +352,7 @@ function CodeMirrorBlock(props: { initial: string; onSave: (v: string, expected:
     }, true);
   }, 0);
 
-  return <div ref={container} style={{ "min-height": "40px", background: "#313244", "border-radius": "4px", padding: "4px" }} />;
+  return <div ref={container} class="cm-block" />;
 }
 
 const ICONS: Record<string, string> = {
@@ -322,6 +366,10 @@ export default function App() {
   const [expanded, setExpanded] = createSignal<string | null>(null);
   const [blocks, setBlocks] = createSignal<Block[]>([]);
   const [blockNotice, setBlockNotice] = createSignal("");
+  const [composerOpen, setComposerOpen] = createSignal(false);
+  const [composerAfter, setComposerAfter] = createSignal<number[] | null>(null);
+  const [composerType, setComposerType] = createSignal("paragraph");
+  const [composerText, setComposerText] = createSignal("");
   const [iconChoice, setIconChoice] = createSignal(localStorage.getItem("orchard.icon") || "flower");
   const [indentBlocks, setIndentBlocks] = createSignal(localStorage.getItem("orchard.indentBlocks") !== "false");
   const [settingsOpen, setSettingsOpen] = createSignal(false);
@@ -444,6 +492,7 @@ export default function App() {
 
   async function toggle(id: string) {
     setBlockNotice("");
+    setComposerOpen(false);
     if (expanded() === id) { setExpanded(null); setBlocks([]); return; }
     setExpanded(id);
     try {
@@ -497,6 +546,47 @@ export default function App() {
     // edit is addressed correctly and the user sees the current text.
     if (message.includes("changed on disk")) {
       reloadBlocks(id);
+    }
+  }
+
+  function openComposer(after: number[] | null) {
+    setComposerAfter(after);
+    setComposerText("");
+    setComposerType("paragraph");
+    setComposerOpen(true);
+  }
+
+  async function addBlock(id: string) {
+    const spec = ADD_TYPES.find((t) => t.value === composerType()) || ADD_TYPES[0];
+    const text = composerText().trim();
+    if (spec.value !== "divider" && !text) {
+      setBlockNotice("Type something to add, or choose Divider.");
+      return;
+    }
+    try {
+      const view = await insertBlock(id, composerAfter(), spec.prefix(text));
+      setBlocks(view.blocks);
+      setComposerOpen(false);
+      setComposerText("");
+      setBlockNotice("Added a block.");
+    } catch (e) {
+      setBlockNotice("Add failed: " + String(e));
+    }
+  }
+
+  async function removeBlock(id: string, path: number[], content: string) {
+    if (!confirm("Delete this block and its children?")) return;
+    try {
+      const view = await deleteBlock(id, path, content);
+      setBlocks(view.blocks);
+      setComposerOpen(false);
+      setBlockNotice("Deleted a block.");
+    } catch (e) {
+      const message = String(e);
+      setBlockNotice("Delete failed: " + message);
+      if (message.includes("changed on disk")) {
+        reloadBlocks(id);
+      }
     }
   }
 
@@ -781,13 +871,35 @@ export default function App() {
               <div class="meta">{r.id} · {r.type}{r.status ? " · " + r.status : ""}</div>
               <div class="tags">{(r.tags || []).join(", ")}</div>
               <Show when={expanded() === r.id}>
-                <div class="blocks" style={{ "margin-top": "8px" }}>
+                <div class="blocks" style={{ "margin-top": "8px", cursor: "default" }} onClick={(e) => e.stopPropagation()}>
                   <div class="row" style={{ "margin-bottom": "6px" }}>
                     <button onClick={(e) => { e.stopPropagation(); undo(r.id); }} title="Undo the last block edit">Undo</button>
+                    <button onClick={(e) => { e.stopPropagation(); openComposer(null); }} title="Add a block at the end of the body">Add block</button>
                     <Show when={blockNotice()}>
                       <span class="error">{blockNotice()}</span>
                     </Show>
                   </div>
+                  <Show when={composerOpen()}>
+                    <div class="composer" onClick={(e) => e.stopPropagation()}>
+                      <select value={composerType()} onChange={(e) => setComposerType(e.currentTarget.value)}>
+                        <For each={ADD_TYPES}>{(t) => <option value={t.value}>{t.label}</option>}</For>
+                      </select>
+                      <input
+                        autofocus
+                        value={composerText()}
+                        disabled={composerType() === "divider"}
+                        placeholder={composerType() === "divider" ? "Divider needs no text" : composerAfter() ? "Text to insert after the selected block…" : "Text to add at the end…"}
+                        onInput={(e) => setComposerText(e.currentTarget.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addBlock(r.id); } }}
+                      />
+                      <button class="primary" onClick={() => addBlock(r.id)}>Add</button>
+                      <button onClick={() => setComposerOpen(false)}>Cancel</button>
+                      <span class="hint">{composerAfter() ? "after position " + JSON.stringify(composerAfter()) : "at the end"}</span>
+                    </div>
+                  </Show>
+                  <Show when={blocks().length === 0}>
+                    <div class="hint">This record has no body yet. Use <b>Add block</b> to start writing.</div>
+                  </Show>
                   <For each={blocks()}>
                     {(b, i) => (
                       <BlockNode
@@ -798,6 +910,8 @@ export default function App() {
                         indent={indentBlocks()}
                         onSaved={(view) => handleSaved(r.id, view)}
                         onError={(message) => handleSaveError(r.id, message)}
+                        onInsertAfter={(path) => openComposer(path)}
+                        onDelete={(path, content) => removeBlock(r.id, path, content)}
                       />
                     )}
                   </For>
