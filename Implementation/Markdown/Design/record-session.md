@@ -87,11 +87,20 @@ reopening it picks up host/sync edits and reports `external_changed`. An edit
 also refreshes first. Reconciliation preserves ids where content matches, so
 stable references survive a rewrite by another process.
 
+## Frontmatter editing
+
+The record view has a `Metadata` panel for `title`, `status`, `url`, `tags` and
+`description`. `RecordSession::update_record()` refreshes the file, verifies the
+fingerprint the editor started from, changes only the `Record` fields, and writes
+with the session's current body. A metadata save therefore cannot roll back a
+block edit, and a stale panel cannot overwrite another program's change.
+Metadata writes update `modified`; they are not on the block undo stack.
+
 ## Limits
 
 - Undo is per session and in memory; redo is not implemented. Insert and delete
-  are undoable through the same stack.
+  are undoable through the same stack; metadata changes are not.
 - A WAL is one file per record, not per window. Multiple Orchard windows on the
   same record are not coordinated yet.
-- Frontmatter is not part of the body session; metadata editing is a separate
-  surface.
+- Frontmatter fields outside the five edited ones are preserved but not exposed
+  in the panel; edit them in the file.

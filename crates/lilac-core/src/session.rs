@@ -89,6 +89,12 @@ impl RecordSession {
     pub fn recovered_edits(&self) -> usize {
         self.recovered_edits
     }
+    /// Fingerprint of the file version this session is based on. The UI sends
+    /// it back with metadata updates so a changed file is refused, not
+    /// silently overwritten.
+    pub fn base_fingerprint(&self) -> u64 {
+        self.base_fingerprint
+    }
 
     /// Replay WAL edits when they belong to the current file version.
     /// A WAL from another version is never applied: it is moved aside so the
@@ -249,6 +255,43 @@ impl RecordSession {
             return Err(Error::Stale(self.path.to_string_lossy().to_string()));
         }
         Ok(())
+    }
+
+    /// Change frontmatter fields without touching the body. `expected` is the
+    /// file fingerprint the metadata editor started from; when another process
+    /// changed the file in the meantime, nothing is written. The body is kept
+    /// exactly as the session has it, so a metadata save cannot roll back a
+    /// block edit.
+    pub fn update_record<F>(
+        &mut self,
+        expected_fingerprint: Option<u64>,
+        change: F,
+    ) -> Result<bool, Error>
+    where
+        F: FnOnce(&mut Record),
+    {
+        let external_changed = self.refresh_external()?;
+        match expected_fingerprint {
+            Some(expected) if expected != self.base_fingerprint => {
+                return Err(Error::Stale(self.path.to_string_lossy().to_string()));
+            }
+            _ => {}
+        }
+        self.check_disk_unchanged()?;
+        let original = self.record.clone();
+        change(&mut self.record);
+        self.record.modified = Some(chrono::Utc::now().to_rfc3339());
+        let body = if self.body.trim().is_empty() {
+            None
+        } else {
+            Some(self.body.as_str())
+        };
+        if let Err(e) = write_record(&self.path, &self.record, body) {
+            self.record = original;
+            return Err(e);
+        }
+        self.base_fingerprint = fingerprint(fs::read(&self.path)?.as_slice());
+        Ok(external_changed)
     }
 
     /// Write a body that has already been prepared and journalled. Restores the
@@ -490,5 +533,66 @@ mod tests {
         assert_eq!(report.recovered_edits, 1);
         assert!(!session.body().contains("# Hi"));
         assert!(!fs::read_to_string(&path).unwrap().contains("# Hi"));
+    }
+
+    #[test]
+    fn metadata_update_preserves_body_and_unknown_fields() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note--rec_meta.md");
+        let mut record = Record::new("rec_meta", "note");
+        record.title = Some("Before".into());
+        record.extra.insert(
+            "custom".to_string(),
+            serde_yaml::Value::String("keep".to_string()),
+        );
+        write_record(&path, &record, Some("# Hi\n\npara\n")).unwrap();
+
+        let (mut session, _) =
+            RecordSession::open(&path, Wal::new(dir.path().join("wal.log"))).unwrap();
+        let body_before = session.body().to_string();
+        let version = session.base_fingerprint();
+
+        session
+            .update_record(Some(version), |r| {
+                r.title = Some("After".into());
+                r.tags = vec!["rust".into(), "local-first".into()];
+                r.status = Some("active".into());
+                r.url = Some("https://example.com".into());
+            })
+            .unwrap();
+
+        assert_eq!(session.body(), body_before);
+        assert_eq!(session.record().title.as_deref(), Some("After"));
+        let (saved, body) = read_record(&path).unwrap();
+        assert_eq!(saved.title.as_deref(), Some("After"));
+        assert_eq!(saved.tags, vec!["rust", "local-first"]);
+        assert_eq!(saved.status.as_deref(), Some("active"));
+        assert_eq!(
+            saved.extra.get("custom"),
+            Some(&serde_yaml::Value::String("keep".to_string()))
+        );
+        assert_eq!(body.as_deref(), Some("# Hi\n\npara"));
+        assert_ne!(session.base_fingerprint(), version);
+    }
+
+    #[test]
+    fn metadata_update_from_a_stale_version_is_refused() {
+        let dir = TempDir::new().unwrap();
+        let path = record_file(&dir);
+        let (mut session, _) =
+            RecordSession::open(&path, Wal::new(dir.path().join("wal.log"))).unwrap();
+        let stale_version = session.base_fingerprint();
+
+        // Another program changes the file after the editor opened it.
+        let (mut record, body) = read_record(&path).unwrap();
+        record.title = Some("Other".into());
+        write_record(&path, &record, body.as_deref()).unwrap();
+
+        let error = session
+            .update_record(Some(stale_version), |r| r.title = Some("Mine".into()))
+            .unwrap_err();
+        assert!(matches!(error, Error::Stale(_)));
+        let (saved, _) = read_record(&path).unwrap();
+        assert_eq!(saved.title.as_deref(), Some("Other"));
     }
 }

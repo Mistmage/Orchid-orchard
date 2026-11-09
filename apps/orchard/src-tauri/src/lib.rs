@@ -60,6 +60,10 @@ fn session_view(
     serde_json::json!({
         "blocks": session.blocks(),
         "body": session.body(),
+        "record": session.record(),
+        // A 64-bit fingerprint exceeds JavaScript's safe integer range, so it
+        // travels as a decimal string and is parsed again in Rust.
+        "fingerprint": session.base_fingerprint().to_string(),
         "recovered_edits": report.map(|r| r.recovered_edits).unwrap_or(0),
         "orphaned_wal": report.and_then(|r| r.orphaned_wal.as_ref()).map(|p| p.to_string_lossy().to_string()),
         "external_changed": external_changed,
@@ -89,6 +93,37 @@ impl From<Record> for RecordView {
             folder: r.folder,
         }
     }
+}
+
+#[derive(serde::Deserialize)]
+struct RecordFields {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+fn clean_field(value: Option<String>) -> Option<String> {
+    value
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn clean_tags(tags: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for tag in tags {
+        let tag = tag.trim();
+        if !tag.is_empty() && !out.iter().any(|t| t == tag) {
+            out.push(tag.to_string());
+        }
+    }
+    out
 }
 
 fn records_root() -> PathBuf {
@@ -366,6 +401,38 @@ fn delete_block_cmd(
 }
 
 #[tauri::command]
+fn update_record_fields_cmd(
+    state: tauri::State<Sessions>,
+    id: String,
+    fields: RecordFields,
+    expected_fingerprint: Option<String>,
+) -> Result<String, String> {
+    let expected = match expected_fingerprint {
+        Some(value) if !value.is_empty() => Some(
+            value
+                .parse::<u64>()
+                .map_err(|_| format!("invalid fingerprint: {}", value))?,
+        ),
+        _ => None,
+    };
+    let mut map = state
+        .0
+        .lock()
+        .map_err(|_| "session lock poisoned".to_string())?;
+    let (session, _report) = ensure_open(&mut map, &id)?;
+    let external_changed = session
+        .update_record(expected, |record| {
+            record.title = clean_field(fields.title);
+            record.tags = clean_tags(fields.tags);
+            record.status = clean_field(fields.status);
+            record.url = clean_field(fields.url);
+            record.description = clean_field(fields.description);
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(session_view(session, None, external_changed).to_string())
+}
+
+#[tauri::command]
 fn move_records_cmd(
     state: tauri::State<Sessions>,
     ids: Vec<String>,
@@ -420,6 +487,7 @@ pub fn run() {
             insert_block_cmd,
             delete_block_cmd,
             move_records_cmd,
+            update_record_fields_cmd,
             undo_block_edit_cmd,
             records_root_path,
             register_native_host,

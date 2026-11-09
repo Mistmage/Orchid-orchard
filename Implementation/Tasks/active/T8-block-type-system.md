@@ -40,15 +40,19 @@ Shipped:
 - The editor paints type-aware surfaces (heading sizes, quote rule, code
   surface, divider, frontmatter, table/math) and shows per-block `+` / `×`
   actions on hover.
+- A `Metadata` panel edits title, status, URL, tags and description through the
+  session. Writes are fingerprint-guarded and preserve the body; other
+  frontmatter fields still round-trip untouched.
 - The record view has a user-toggleable hierarchy indent (default on); with it
   off, all blocks share the same left edge and hierarchy stays internal.
 - Settings is split into Orchid / Storage / Lilac / Block types tabs, with styled
   buttons and inputs.
 
-Verified: 77 core + 10 roundtrip + 5 probe + 4 config tests pass, clippy is
+Verified: 79 core + 10 roundtrip + 5 probe + 4 config tests pass, clippy is
 clean, frontend/Tauri/release builds succeed, and live CDP checks confirm block
 editing, insertion (section/leaf/append/code), deletion of leaves and subtrees,
-stale-delete refusal, undo, the composer UI, and WAL replay.
+stale-delete refusal, undo, the composer UI, WAL replay, and fingerprint-guarded
+metadata saves.
 
 Remaining:
 
@@ -58,5 +62,4 @@ Remaining:
   frontmatter only at offset 0).
 - Render each block type with its own leaf component while keeping Rust as the
   authority for structure.
-- Redo, multi-window coordination, and frontmatter/metadata editing in the
-  session surface.
+- Redo, multi-window coordination, and richer per-block-type components.

@@ -81,7 +81,8 @@ contain `..` are ignored.
 
 `list_records`, `search`, `load_record`, `get_blocks`,
 `apply_block_edit_cmd`, `insert_block_cmd`, `delete_block_cmd`,
-`move_records_cmd`, `undo_block_edit_cmd`, `records_root_path`,
+`move_records_cmd`, `update_record_fields_cmd`, `undo_block_edit_cmd`,
+`records_root_path`,
 `register_native_host`, `get_block_types`, `get_settings`, `open_folder`,
 `set_registered_folders_cmd`, `set_records_root_cmd`, `set_naming_cmd`,
 `preview_naming_cmd`.
@@ -91,8 +92,10 @@ contain `..` are ignored.
 the registry and its validity.
 
 `get_blocks` returns a session view:
-`{ blocks, body, recovered_edits, orphaned_wal, external_changed }`. The tree is
-re-read from the session and external changes are reconciled on every call.
+`{ blocks, body, record, fingerprint, recovered_edits, orphaned_wal, external_changed }`.
+The tree is re-read from the session and external changes are reconciled on every
+call. `fingerprint` is the FNV-1a version of the whole file, sent as a decimal
+string because a 64-bit value does not fit JavaScript's safe integer range.
 `apply_block_edit_cmd` takes `{ id, blockPath, newContent, expectedContent }`;
 `expectedContent` is the text the editor started from and guards against
 positional paths drifting after an external edit. `undo_block_edit_cmd` takes
@@ -125,6 +128,15 @@ for a moved record, and the next edit reopens it at the new path. The UI exposes
 per-record checkboxes, select-all, a folder input with registered-folder
 suggestions, a folder badge on each card, and a `Move…` action in the record
 view. `IndexEntry` carries `folder` so list views do not re-read each file.
+
+`update_record_fields_cmd({ id, fields, expectedFingerprint })` replaces the
+editable YAML fields (`title`, `tags`, `status`, `url`, `description`). It
+writes through the live session so the body is preserved exactly, refreshes the
+file version first, and refuses the write when `expectedFingerprint` no longer
+matches. Empty strings clear a field; tags are trimmed, de-duplicated and empty
+entries dropped. Moving a record or editing its body changes the fingerprint, so
+the view returns the new one with every session result and the UI keeps it
+current. Metadata changes update `modified` but are not on the block undo stack.
 
 ## Naming
 

@@ -188,9 +188,22 @@ async function moveRecords(ids: string[], folder: string): Promise<MoveReport> {
   return JSON.parse(json) as MoveReport;
 }
 
+interface RecordMeta {
+  id: string;
+  type: string;
+  title: string | null;
+  tags: string[];
+  status: string | null;
+  url: string | null;
+  description: string | null;
+  folder: string | null;
+}
+
 interface BlockSessionView {
   blocks: Block[];
   body: string;
+  record?: RecordMeta;
+  fingerprint?: string;
   recovered_edits: number;
   orphaned_wal: string | null;
   external_changed: boolean;
@@ -198,6 +211,11 @@ interface BlockSessionView {
 
 async function fetchBlocks(id: string): Promise<BlockSessionView> {
   const json = await invoke("get_blocks", { id }) as string;
+  return JSON.parse(json) as BlockSessionView;
+}
+
+async function updateRecordFields(id: string, fields: { title: string | null; tags: string[]; status: string | null; url: string | null; description: string | null }, expectedFingerprint: string | null): Promise<BlockSessionView> {
+  const json = await invoke("update_record_fields_cmd", { id, fields, expectedFingerprint }) as string;
   return JSON.parse(json) as BlockSessionView;
 }
 
@@ -384,6 +402,14 @@ export default function App() {
   const [selected, setSelected] = createSignal<Set<string>>(new Set());
   const [moveFolder, setMoveFolder] = createSignal("");
   const [moveNotice, setMoveNotice] = createSignal("");
+  const [metaTitle, setMetaTitle] = createSignal("");
+  const [metaTags, setMetaTags] = createSignal("");
+  const [metaStatus, setMetaStatus] = createSignal("");
+  const [metaUrl, setMetaUrl] = createSignal("");
+  const [metaDescription, setMetaDescription] = createSignal("");
+  const [metaFingerprint, setMetaFingerprint] = createSignal<string | null>(null);
+  const [metaNotice, setMetaNotice] = createSignal("");
+  const [metaOpen, setMetaOpen] = createSignal(false);
   const [iconChoice, setIconChoice] = createSignal(localStorage.getItem("orchard.icon") || "flower");
   const [indentBlocks, setIndentBlocks] = createSignal(localStorage.getItem("orchard.indentBlocks") !== "false");
   const [settingsOpen, setSettingsOpen] = createSignal(false);
@@ -539,7 +565,13 @@ export default function App() {
         (failed ? `; ${failed} failed: ${report.errors.join("; ")}` : ""),
       );
       setSelected(new Set());
+      const openId = expanded();
       await load();
+      // A moved record's file changed location; refresh its view so the
+      // metadata panel gets the new version fingerprint.
+      if (openId && ids.includes(openId)) {
+        await reloadBlocks(openId);
+      }
     } catch (e) {
       setMoveNotice("Move failed: " + String(e));
     }
@@ -548,11 +580,14 @@ export default function App() {
   async function toggle(id: string) {
     setBlockNotice("");
     setComposerOpen(false);
+    setMetaNotice("");
+    setMetaOpen(false);
     if (expanded() === id) { setExpanded(null); setBlocks([]); return; }
     setExpanded(id);
     try {
       const view = await fetchBlocks(id);
       setBlocks(view.blocks);
+      applyMeta(view);
       if (view.recovered_edits) {
         setBlockNotice(`Recovered ${view.recovered_edits} unsaved edit${view.recovered_edits === 1 ? "" : "s"} from the write-ahead log.`);
       } else if (view.orphaned_wal) {
@@ -570,9 +605,56 @@ export default function App() {
     if (view.external_changed) {
       setBlockNotice("Incorporated changes another program made to this file.");
     }
+    syncFingerprint(view);
     // Only rebuild the tree when the document shape actually changed.
     if (blockShape(view.blocks) !== blockShape(blocks())) {
       setBlocks(view.blocks);
+    }
+  }
+
+  function syncFingerprint(view: BlockSessionView) {
+    if (view.fingerprint) setMetaFingerprint(view.fingerprint);
+  }
+
+  /// Load the YAML fields into the metadata form. Called when a record opens
+  /// and after a metadata save; ordinary block saves only refresh the version.
+  function applyMeta(view: BlockSessionView) {
+    syncFingerprint(view);
+    const record = view.record;
+    if (!record) return;
+    setMetaTitle(record.title || "");
+    setMetaTags((record.tags || []).join(", "));
+    setMetaStatus(record.status || "");
+    setMetaUrl(record.url || "");
+    setMetaDescription(record.description || "");
+  }
+
+  async function saveMetadata(id: string) {
+    try {
+      const view = await updateRecordFields(id, {
+        title: metaTitle().trim() || null,
+        tags: metaTags().split(",").map((t) => t.trim()).filter(Boolean),
+        status: metaStatus().trim() || null,
+        url: metaUrl().trim() || null,
+        description: metaDescription().trim() || null,
+      }, metaFingerprint());
+      applyMeta(view);
+      setBlocks(view.blocks);
+      setMetaNotice("Saved metadata.");
+      const saved = view.record;
+      if (saved) {
+        // Update the card in place; a full reload would rebuild the list and
+        // collapse the metadata panel the user is working in.
+        setRecords((prev) => prev.map((r) => r.id === id
+          ? { ...r, title: saved.title, tags: saved.tags, status: saved.status }
+          : r));
+      }
+    } catch (e) {
+      const message = String(e);
+      setMetaNotice("Save failed: " + message);
+      if (message.includes("changed since")) {
+        await reloadBlocks(id);
+      }
     }
   }
 
@@ -580,6 +662,7 @@ export default function App() {
     try {
       const view = await undoBlockEdit(id);
       setBlocks(view.blocks);
+      syncFingerprint(view);
       setBlockNotice("Undid the last edit.");
     } catch (e) {
       setBlockNotice("Undo failed: " + String(e));
@@ -590,6 +673,7 @@ export default function App() {
     try {
       const view = await fetchBlocks(id);
       setBlocks(view.blocks);
+      applyMeta(view);
     } catch {
       /* the notice already explains the failure */
     }
@@ -621,6 +705,7 @@ export default function App() {
     try {
       const view = await insertBlock(id, composerAfter(), spec.prefix(text));
       setBlocks(view.blocks);
+      syncFingerprint(view);
       setComposerOpen(false);
       setComposerText("");
       setBlockNotice("Added a block.");
@@ -634,6 +719,7 @@ export default function App() {
     try {
       const view = await deleteBlock(id, path, content);
       setBlocks(view.blocks);
+      syncFingerprint(view);
       setComposerOpen(false);
       setBlockNotice("Deleted a block.");
     } catch (e) {
@@ -978,6 +1064,38 @@ export default function App() {
                       <span class="error">{blockNotice()}</span>
                     </Show>
                   </div>
+                  <details class="meta-editor" open={metaOpen()} onToggle={(e) => setMetaOpen(e.currentTarget.open)}>
+                    <summary>Metadata</summary>
+                    <div class="meta-grid">
+                      <label class="field">
+                        <span>Title</span>
+                        <input value={metaTitle()} onInput={(e) => setMetaTitle(e.currentTarget.value)} />
+                      </label>
+                      <label class="field">
+                        <span>Status</span>
+                        <input value={metaStatus()} placeholder="e.g. Reading" onInput={(e) => setMetaStatus(e.currentTarget.value)} />
+                      </label>
+                      <label class="field">
+                        <span>URL</span>
+                        <input value={metaUrl()} placeholder="https://…" onInput={(e) => setMetaUrl(e.currentTarget.value)} />
+                      </label>
+                      <label class="field">
+                        <span>Tags (comma separated)</span>
+                        <input value={metaTags()} placeholder="rust, local-first" onInput={(e) => setMetaTags(e.currentTarget.value)} />
+                      </label>
+                    </div>
+                    <label class="field">
+                      <span>Description</span>
+                      <input value={metaDescription()} onInput={(e) => setMetaDescription(e.currentTarget.value)} />
+                    </label>
+                    <div class="row" style={{ "margin-top": "8px" }}>
+                      <button class="primary" onClick={(e) => { e.stopPropagation(); saveMetadata(r.id); }}>Save metadata</button>
+                      <span class="hint">Writes YAML frontmatter only; the body stays as it is.</span>
+                      <Show when={metaNotice()}>
+                        <span class={metaNotice().startsWith("Saved") ? "hint status-ok" : "error"}>{metaNotice()}</span>
+                      </Show>
+                    </div>
+                  </details>
                   <Show when={composerOpen()}>
                     <div class="composer" onClick={(e) => e.stopPropagation()}>
                       <select value={composerType()} onChange={(e) => setComposerType(e.currentTarget.value)}>

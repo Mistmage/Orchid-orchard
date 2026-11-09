@@ -205,6 +205,11 @@ like `Archive/2026` are fine, blank means the type's own folder — and press
 explicit folder equal to the type folder is dropped. Invalid targets such as
 `../outside` are refused before any file moves.
 
+The `Metadata` panel in an open record edits title, status, URL, tags and
+description. It writes only frontmatter and refuses a save when the file changed
+since the panel loaded, so it cannot silently overwrite a block edit or another
+program's change.
+
 ## Principles
 
 - Files are the database; indexes are caches.
