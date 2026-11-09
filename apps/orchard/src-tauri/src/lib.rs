@@ -1,5 +1,8 @@
 use lilac_core::session::{OpenReport, RecordSession};
-use lilac_core::{read_record, rebuild_index, search_records, Record, Wal};
+use lilac_core::{
+    Record, Wal, find_record_by_id, move_record_to_folder, normalize_folder, read_record,
+    rebuild_index, search_records,
+};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -38,6 +41,17 @@ fn ensure_session<'a>(
     Ok((map.get_mut(id).expect("present"), None))
 }
 
+/// Look the record up *after* the session lock is held. A move command holds
+/// that same lock while it renames files, so a command that was waiting cannot
+/// keep using the path it saw before the move.
+fn ensure_open<'a>(
+    map: &'a mut HashMap<String, RecordSession>,
+    id: &str,
+) -> Result<(&'a mut RecordSession, Option<OpenReport>), String> {
+    let path = find_record_by_id(&records_root(), id).ok_or_else(|| format!("not found: {}", id))?;
+    ensure_session(map, id, &path)
+}
+
 fn session_view(
     session: &RecordSession,
     report: Option<&OpenReport>,
@@ -60,6 +74,7 @@ struct RecordView {
     tags: Vec<String>,
     status: Option<String>,
     url: Option<String>,
+    folder: Option<String>,
 }
 
 impl From<Record> for RecordView {
@@ -71,6 +86,7 @@ impl From<Record> for RecordView {
             tags: r.tags,
             status: r.status,
             url: r.url,
+            folder: r.folder,
         }
     }
 }
@@ -91,6 +107,7 @@ fn list_records() -> Result<Vec<RecordView>, String> {
         tags: e.tags,
         status: e.status,
         url: None,
+        folder: e.folder,
     }).collect())
 }
 
@@ -105,6 +122,7 @@ fn search(query: String) -> Result<Vec<RecordView>, String> {
         tags: e.tags,
         status: e.status,
         url: None,
+        folder: e.folder,
     }).collect())
 }
 
@@ -112,26 +130,9 @@ fn search(query: String) -> Result<Vec<RecordView>, String> {
 fn load_record(id: String) -> Result<String, String> {
     let root = records_root();
     // find file
-    let path = find_record_file(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
+    let path = find_record_by_id(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
     let (rec, body) = read_record(&path).map_err(|e| e.to_string())?;
     Ok(serde_json::to_string(&serde_json::json!({"record": rec, "body": body})).unwrap_or_default())
-}
-
-fn find_record_file(dir: &std::path::Path, id: &str) -> Option<PathBuf> {
-    if !dir.is_dir() { return None; }
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Some(p) = find_record_file(&path, id) { return Some(p); }
-            } else if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                if let Ok((rec, _)) = read_record(&path) {
-                    if rec.id == id { return Some(path); }
-                }
-            }
-        }
-    }
-    None
 }
 
 #[tauri::command]
@@ -291,10 +292,8 @@ fn dirs_local_app_data() -> std::path::PathBuf {
 
 #[tauri::command]
 fn get_blocks(state: tauri::State<Sessions>, id: String) -> Result<String, String> {
-    let root = records_root();
-    let path = find_record_file(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
     let mut map = state.0.lock().map_err(|_| "session lock poisoned".to_string())?;
-    let (session, report) = ensure_session(&mut map, &id, &path)?;
+    let (session, report) = ensure_open(&mut map, &id)?;
     // Pick up edits made by another program (or the browser host) while open.
     let external_changed = session.refresh_external().map_err(|e| e.to_string())?;
     Ok(session_view(session, report.as_ref(), external_changed).to_string())
@@ -308,10 +307,8 @@ fn apply_block_edit_cmd(
     new_content: String,
     expected_content: Option<String>,
 ) -> Result<String, String> {
-    let root = records_root();
-    let path = find_record_file(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
     let mut map = state.0.lock().map_err(|_| "session lock poisoned".to_string())?;
-    let (session, _report) = ensure_session(&mut map, &id, &path)?;
+    let (session, _report) = ensure_open(&mut map, &id)?;
     let mut external_changed = session.refresh_external().map_err(|e| e.to_string())?;
     // The block path is positional: if the file changed on disk, the same path
     // may now point at a different block. Refuse rather than overwrite it.
@@ -335,10 +332,8 @@ fn insert_block_cmd(
     after_path: Option<Vec<usize>>,
     content: String,
 ) -> Result<String, String> {
-    let root = records_root();
-    let path = find_record_file(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
     let mut map = state.0.lock().map_err(|_| "session lock poisoned".to_string())?;
-    let (session, _report) = ensure_session(&mut map, &id, &path)?;
+    let (session, _report) = ensure_open(&mut map, &id)?;
     let external_changed = session
         .insert_block(after_path.as_deref(), &content)
         .map_err(|e| e.to_string())?;
@@ -352,10 +347,8 @@ fn delete_block_cmd(
     block_path: Vec<usize>,
     expected_content: Option<String>,
 ) -> Result<String, String> {
-    let root = records_root();
-    let path = find_record_file(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
     let mut map = state.0.lock().map_err(|_| "session lock poisoned".to_string())?;
-    let (session, _report) = ensure_session(&mut map, &id, &path)?;
+    let (session, _report) = ensure_open(&mut map, &id)?;
     let external_changed = session.refresh_external().map_err(|e| e.to_string())?;
     // Same positional-path guard as edits: never delete a block that changed.
     if let Some(expected) = expected_content {
@@ -373,11 +366,44 @@ fn delete_block_cmd(
 }
 
 #[tauri::command]
-fn undo_block_edit_cmd(state: tauri::State<Sessions>, id: String) -> Result<String, String> {
+fn move_records_cmd(
+    state: tauri::State<Sessions>,
+    ids: Vec<String>,
+    folder: String,
+) -> Result<String, String> {
     let root = records_root();
-    let path = find_record_file(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
+    // Validate once so an invalid target fails the batch before any file moves.
+    let target = normalize_folder(&folder)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let mut moved = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+    let mut sessions = state
+        .0
+        .lock()
+        .map_err(|_| "session lock poisoned".to_string())?;
+    for id in ids {
+        let Some(path) = find_record_by_id(&root, &id) else {
+            errors.push(format!("{}: not found", id));
+            continue;
+        };
+        match move_record_to_folder(&root, &path, &target) {
+            Ok(_) => {
+                // The session's path is now stale; the next open uses the new
+                // file and the same WAL name, so dropping it is safe.
+                sessions.remove(&id);
+                moved += 1;
+            }
+            Err(e) => errors.push(format!("{}: {}", id, e)),
+        }
+    }
+    Ok(serde_json::json!({ "moved": moved, "errors": errors }).to_string())
+}
+
+#[tauri::command]
+fn undo_block_edit_cmd(state: tauri::State<Sessions>, id: String) -> Result<String, String> {
     let mut map = state.0.lock().map_err(|_| "session lock poisoned".to_string())?;
-    let (session, _report) = ensure_session(&mut map, &id, &path)?;
+    let (session, _report) = ensure_open(&mut map, &id)?;
     session.undo().map_err(|e| e.to_string())?;
     Ok(session_view(session, None, false).to_string())
 }
@@ -393,6 +419,7 @@ pub fn run() {
             apply_block_edit_cmd,
             insert_block_cmd,
             delete_block_cmd,
+            move_records_cmd,
             undo_block_edit_cmd,
             records_root_path,
             register_native_host,

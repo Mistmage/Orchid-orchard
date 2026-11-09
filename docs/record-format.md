@@ -55,6 +55,7 @@ Research candidate.
 - Timestamps: `created`, `modified`, `opened`, `last_viewed` (RFC3339)
 - References: `parent`, `related`, `links`
 - Classification: `tags`, `categories`, `status`
+- Placement: `folder` (path relative to `Records/`; omit for the type folder)
 - Page: `url`
 - Browser metadata (optional, ephemeral, treated as hints): `open`, `position`,
   `tab_group`, `window_hint`

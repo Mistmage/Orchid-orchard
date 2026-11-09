@@ -81,7 +81,7 @@ contain `..` are ignored.
 
 `list_records`, `search`, `load_record`, `get_blocks`,
 `apply_block_edit_cmd`, `insert_block_cmd`, `delete_block_cmd`,
-`undo_block_edit_cmd`, `records_root_path`,
+`move_records_cmd`, `undo_block_edit_cmd`, `records_root_path`,
 `register_native_host`, `get_block_types`, `get_settings`, `open_folder`,
 `set_registered_folders_cmd`, `set_records_root_cmd`, `set_naming_cmd`,
 `preview_naming_cmd`.
@@ -113,6 +113,18 @@ when the block changed on disk. The UI composes new blocks from a type select
 `get_settings` includes the live `naming` config. `set_naming_cmd({ naming })`
 saves it to `config.yaml`; `preview_naming_cmd({ naming, title, url })` derives a
 title without writing a record.
+
+`move_records_cmd({ ids, folder })` moves one or many records to a folder
+relative to `Records/` (blank means the record's type folder). The target is
+validated once before any file moves; `normalize_folder` rejects absolute paths,
+`.`/`..` segments and drive/stream separators, while accepting nested paths and
+backslashes. `move_record_to_folder` writes the destination before removing the
+source, so a failed move never loses the record; moving into the type's own
+folder clears the redundant `folder` field. The command drops any open session
+for a moved record, and the next edit reopens it at the new path. The UI exposes
+per-record checkboxes, select-all, a folder input with registered-folder
+suggestions, a folder badge on each card, and a `Move…` action in the record
+view. `IndexEntry` carries `folder` so list views do not re-read each file.
 
 ## Naming
 

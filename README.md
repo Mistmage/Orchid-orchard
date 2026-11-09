@@ -189,6 +189,22 @@ policy, and reports `N registered · registry valid`.
 See `Implementation/Markdown/Design/block-type-system.md` for the design and
 extension steps.
 
+## Editing and placement
+
+The record view edits blocks in place. `Add block` and the per-block `+` open a
+composer: choose paragraph, heading, bullet, quote, code or divider, type the
+text, and the complete Markdown is inserted (a section's `+` inserts after its
+subtree). `×` deletes a block and its children. Every operation is journaled and
+undoable, and a block that changed on disk is never overwritten by a stale
+editor path.
+
+Records can be moved without leaving Orchard. Select one or more cards (or use
+`Move…` in an open record), type a folder relative to `Records/` — nested paths
+like `Archive/2026` are fine, blank means the type's own folder — and press
+`Move`. The file is renamed, the record's `folder` field is updated, and an
+explicit folder equal to the type folder is dropped. Invalid targets such as
+`../outside` are refused before any file moves.
+
 ## Principles
 
 - Files are the database; indexes are caches.

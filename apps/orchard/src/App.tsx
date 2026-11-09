@@ -18,6 +18,7 @@ interface Record {
   title: string | null;
   tags: string[];
   status: string | null;
+  folder: string | null;
 }
 
 interface Settings {
@@ -175,6 +176,16 @@ interface BlockTypeReport {
 
 async function fetchRecords(): Promise<Record[]> {
   return (await invoke("list_records")) as Record[];
+}
+
+interface MoveReport {
+  moved: number;
+  errors: string[];
+}
+
+async function moveRecords(ids: string[], folder: string): Promise<MoveReport> {
+  const json = (await invoke("move_records_cmd", { ids, folder })) as string;
+  return JSON.parse(json) as MoveReport;
 }
 
 interface BlockSessionView {
@@ -370,6 +381,9 @@ export default function App() {
   const [composerAfter, setComposerAfter] = createSignal<number[] | null>(null);
   const [composerType, setComposerType] = createSignal("paragraph");
   const [composerText, setComposerText] = createSignal("");
+  const [selected, setSelected] = createSignal<Set<string>>(new Set());
+  const [moveFolder, setMoveFolder] = createSignal("");
+  const [moveNotice, setMoveNotice] = createSignal("");
   const [iconChoice, setIconChoice] = createSignal(localStorage.getItem("orchard.icon") || "flower");
   const [indentBlocks, setIndentBlocks] = createSignal(localStorage.getItem("orchard.indentBlocks") !== "false");
   const [settingsOpen, setSettingsOpen] = createSignal(false);
@@ -488,6 +502,47 @@ export default function App() {
     const q = query().trim();
     const res = q ? await invoke("search", { query: q }) as Record[] : await fetchRecords();
     setRecords(res);
+    // Selection is a set of ids; drop ids that no longer exist after a search.
+    const visible = new Set(res.map((r) => r.id));
+    setSelected((prev) => new Set([...prev].filter((id) => visible.has(id))));
+  }
+
+  function toggleSelected(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  const allSelected = () => records().length > 0 && records().every((r) => selected().has(r.id));
+
+  function toggleAll() {
+    setSelected(allSelected() ? new Set() : new Set(records().map((r) => r.id)));
+  }
+
+  function startMove(id: string, folder: string | null) {
+    setSelected(new Set([id]));
+    setMoveFolder(folder || "");
+    setMoveNotice("");
+    setTimeout(() => document.getElementById("move-folder")?.focus(), 0);
+  }
+
+  async function moveSelected() {
+    const ids = [...selected()];
+    if (ids.length === 0) return;
+    try {
+      const report = await moveRecords(ids, moveFolder());
+      const failed = report.errors.length;
+      setMoveNotice(
+        `Moved ${report.moved} record${report.moved === 1 ? "" : "s"}` +
+        (failed ? `; ${failed} failed: ${report.errors.join("; ")}` : ""),
+      );
+      setSelected(new Set());
+      await load();
+    } catch (e) {
+      setMoveNotice("Move failed: " + String(e));
+    }
   }
 
   async function toggle(id: string) {
@@ -863,11 +918,54 @@ export default function App() {
           </div>
         </div>
       </Show>
+      <Show when={records().length > 0}>
+        <div class="list-tools">
+          <label class="select-all">
+            <input type="checkbox" checked={allSelected()} onChange={toggleAll} />
+            Select all
+          </label>
+          <Show when={selected().size > 0}>
+            <span class="hint">{selected().size} selected</span>
+            <input
+              id="move-folder"
+              class="move-folder"
+              list="folder-choices"
+              placeholder="folder under Records/ (blank = type folder)"
+              value={moveFolder()}
+              onInput={(e) => setMoveFolder(e.currentTarget.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); moveSelected(); } }}
+            />
+            <datalist id="folder-choices">
+              <For each={settings()?.registered_folders || ["page", "collection", "bookmark", "snapshot", "note", "snippet"]}>
+                {(f) => <option value={f} />}
+              </For>
+            </datalist>
+            <button class="primary" onClick={moveSelected}>Move</button>
+            <button onClick={() => { setSelected(new Set()); setMoveNotice(""); }}>Clear</button>
+          </Show>
+          <Show when={moveNotice()}>
+            <span class={moveNotice().startsWith("Moved") && !moveNotice().includes("failed") ? "hint status-ok" : "error"}>{moveNotice()}</span>
+          </Show>
+        </div>
+      </Show>
       <div style={{ display: "grid", gap: "8px", "max-height": "80vh", "overflow": "auto", "margin-top": "12px" }}>
         <For each={records()}>
           {(r) => (
             <div class="card" onClick={() => toggle(r.id)} style={{ cursor: "pointer" }}>
-              <div class="title">{r.title || r.id}</div>
+              <div class="card-head">
+                <input
+                  type="checkbox"
+                  class="select-box"
+                  checked={selected().has(r.id)}
+                  title="Select for moving"
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={() => toggleSelected(r.id)}
+                />
+                <div class="title">{r.title || r.id}</div>
+                <Show when={r.folder}>
+                  <span class="folder-badge" title={"Records/" + r.folder}>Records/{r.folder}</span>
+                </Show>
+              </div>
               <div class="meta">{r.id} · {r.type}{r.status ? " · " + r.status : ""}</div>
               <div class="tags">{(r.tags || []).join(", ")}</div>
               <Show when={expanded() === r.id}>
@@ -875,6 +973,7 @@ export default function App() {
                   <div class="row" style={{ "margin-bottom": "6px" }}>
                     <button onClick={(e) => { e.stopPropagation(); undo(r.id); }} title="Undo the last block edit">Undo</button>
                     <button onClick={(e) => { e.stopPropagation(); openComposer(null); }} title="Add a block at the end of the body">Add block</button>
+                    <button onClick={(e) => { e.stopPropagation(); startMove(r.id, r.folder); }} title="Move this record to another folder under Records/">Move…</button>
                     <Show when={blockNotice()}>
                       <span class="error">{blockNotice()}</span>
                     </Show>

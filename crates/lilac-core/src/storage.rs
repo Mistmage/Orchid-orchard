@@ -171,6 +171,104 @@ pub fn records_dir(records_root: &Path, rtype: &str) -> PathBuf {
     records_root.join("Records").join(rtype)
 }
 
+/// Normalise a user-supplied folder to a path relative to `Records/`.
+///
+/// `Ok(None)` means "the type's default folder". Absolute paths and `.`/`..`
+/// segments are rejected rather than silently stripped, so a typo cannot place
+/// a record somewhere the user did not choose. Backslashes are accepted as
+/// separators because Windows users paste them.
+pub fn normalize_folder(raw: &str) -> Result<Option<String>, Error> {
+    let trimmed = raw.trim().replace('\\', "/");
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.starts_with('/') {
+        return Err(Error::Invalid(format!(
+            "folder must be relative to Records/: {}",
+            raw
+        )));
+    }
+    let mut segments = Vec::new();
+    for segment in trimmed.split('/') {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+        if segment == "." || segment == ".." {
+            return Err(Error::Invalid(format!(
+                "folder may not contain . or .. segments: {}",
+                raw
+            )));
+        }
+        if segment.contains(':') {
+            return Err(Error::Invalid(format!(
+                "folder may not contain a drive or stream separator: {}",
+                raw
+            )));
+        }
+        if segment.chars().any(char::is_control) {
+            return Err(Error::Invalid("folder contains control characters".into()));
+        }
+        segments.push(segment);
+    }
+    if segments.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(segments.join("/")))
+    }
+}
+
+/// Move a record into `folder` (relative to `Records/`, empty = the type's
+/// default folder) and update its `folder` field. The destination is written
+/// before the source is removed, so a failed move never loses the record.
+pub fn move_record_to_folder(
+    records_root: &Path,
+    path: &Path,
+    folder: &str,
+) -> Result<PathBuf, Error> {
+    let target = normalize_folder(folder)?;
+    let (mut record, body) = read_record(path)?;
+    let original = record.folder.clone();
+    // An explicit folder equal to the type folder is the default; omit it so
+    // moving a page to `page/` and back leaves no redundant field behind.
+    record.folder = match target {
+        Some(f) if f == record.r#type => None,
+        other => other,
+    };
+    let destination = record_path(records_root, &record);
+    if destination == path {
+        if record.folder != original {
+            write_record(path, &record, body.as_deref())?;
+        }
+        return Ok(path.to_path_buf());
+    }
+    if destination.exists() {
+        return Err(Error::Invalid(format!(
+            "destination already exists: {}",
+            destination.display()
+        )));
+    }
+    write_record(&destination, &record, body.as_deref())?;
+    fs::remove_file(path)?;
+    Ok(destination)
+}
+
+/// Find a record file by id anywhere under `Records/`.
+pub fn find_record_by_id(records_root: &Path, id: &str) -> Option<PathBuf> {
+    let mut found = None;
+    let records_subdir = records_root.join("Records");
+    let _ = walk_md(&records_subdir, &mut |path| {
+        if found.is_some() {
+            return;
+        }
+        match read_record(path) {
+            Ok((record, _)) if record.id == id => found = Some(path.to_path_buf()),
+            _ => {}
+        }
+    });
+    found
+}
+
 pub fn record_path(records_root: &Path, record: &Record) -> PathBuf {
     let base = records_root.join("Records");
     let dir = match &record.folder {
@@ -210,6 +308,8 @@ pub struct IndexEntry {
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
     pub path: String,
     pub modified: Option<String>,
 }
@@ -233,6 +333,7 @@ pub fn rebuild_index(records_root: &Path) -> Result<Index, Error> {
                 title: rec.title,
                 tags: rec.tags,
                 status: rec.status,
+                folder: rec.folder,
                 path: rel,
                 modified: rec.modified,
             });
@@ -294,4 +395,129 @@ pub fn search_records(index: &Index, query: &str) -> Vec<IndexEntry> {
         })
         .cloned()
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn seed(root: &Path, id: &str, rtype: &str, folder: Option<&str>) -> PathBuf {
+        let mut record = Record::new(id, rtype);
+        record.title = Some(format!("Test {id}"));
+        record.folder = folder.map(str::to_string);
+        record.extra.insert(
+            "custom".to_string(),
+            serde_yaml::Value::String("keep".to_string()),
+        );
+        let path = record_path(root, &record);
+        write_record(&path, &record, Some("# Body\n\ntext")).unwrap();
+        path
+    }
+
+    #[test]
+    fn normalize_folder_accepts_nested_and_rejects_escape() {
+        assert_eq!(normalize_folder("").unwrap(), None);
+        assert_eq!(normalize_folder("   ").unwrap(), None);
+        assert_eq!(
+            normalize_folder("Archive\\2026").unwrap(),
+            Some("Archive/2026".to_string())
+        );
+        assert_eq!(normalize_folder("a//b/").unwrap(), Some("a/b".to_string()));
+        assert!(normalize_folder("../outside").is_err());
+        assert!(normalize_folder("a/./b").is_err());
+        assert!(normalize_folder("/absolute").is_err());
+        assert!(normalize_folder("C:/drive").is_err());
+    }
+
+    #[test]
+    fn move_writes_destination_preserves_metadata_and_removes_source() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let source = seed(root, "rec_move", "page", None);
+
+        let destination = move_record_to_folder(root, &source, "Archive/2026").unwrap();
+
+        assert!(!source.exists());
+        assert!(destination.exists());
+        assert_eq!(
+            destination,
+            root.join("Records")
+                .join("Archive")
+                .join("2026")
+                .join(record_filename(&read_record(&destination).unwrap().0))
+        );
+        let (record, body) = read_record(&destination).unwrap();
+        assert_eq!(record.folder.as_deref(), Some("Archive/2026"));
+        assert_eq!(
+            record.extra.get("custom"),
+            Some(&serde_yaml::Value::String("keep".to_string()))
+        );
+        assert_eq!(body.as_deref(), Some("# Body\n\ntext"));
+        assert_eq!(
+            find_record_by_id(root, "rec_move"),
+            Some(destination.clone())
+        );
+
+        let index = rebuild_index(root).unwrap();
+        let entry = index
+            .records
+            .iter()
+            .find(|e| e.id == "rec_move")
+            .expect("indexed");
+        assert_eq!(entry.folder.as_deref(), Some("Archive/2026"));
+        assert!(entry.path.replace('\\', "/").contains("Archive/2026"));
+    }
+
+    #[test]
+    fn move_to_type_folder_clears_redundant_field() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let source = seed(root, "rec_home", "note", Some("Archive"));
+
+        let destination = move_record_to_folder(root, &source, "note").unwrap();
+
+        assert_eq!(
+            destination,
+            root.join("Records")
+                .join("note")
+                .join(record_filename(&read_record(&destination).unwrap().0))
+        );
+        let (record, _) = read_record(&destination).unwrap();
+        assert_eq!(record.folder, None);
+    }
+
+    #[test]
+    fn move_refuses_to_overwrite_an_existing_file() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let source = seed(root, "rec_dup", "page", None);
+        // A second file with the same id already sits at the destination.
+        seed(root, "rec_dup", "page", Some("Archive"));
+
+        let error = move_record_to_folder(root, &source, "Archive").unwrap_err();
+        assert!(error.to_string().contains("destination already exists"));
+        assert!(source.exists());
+    }
+
+    #[test]
+    fn moving_within_the_same_folder_only_updates_the_field() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        // Hand-written folder spelling with a trailing separator normalises.
+        let source = seed(root, "rec_same", "note", Some("note/"));
+        let before = fs::read_to_string(&source).unwrap();
+
+        let destination = move_record_to_folder(root, &source, "").unwrap();
+
+        assert_eq!(destination, source);
+        assert!(
+            !fs::read_to_string(&destination)
+                .unwrap()
+                .contains("folder:")
+        );
+        assert_ne!(before, fs::read_to_string(&destination).unwrap());
+        let (record, _) = read_record(&destination).unwrap();
+        assert_eq!(record.folder, None);
+    }
 }
