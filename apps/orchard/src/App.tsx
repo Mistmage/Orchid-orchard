@@ -188,6 +188,34 @@ async function moveRecords(ids: string[], folder: string): Promise<MoveReport> {
   return JSON.parse(json) as MoveReport;
 }
 
+interface TemplateInfo {
+  id: string;
+  title: string | null;
+  target_type: string;
+  description: string | null;
+  path: string;
+}
+
+interface CreatedRecord {
+  record: RecordMeta;
+  path: string;
+}
+
+async function fetchTemplates(): Promise<TemplateInfo[]> {
+  const json = (await invoke("list_templates_cmd")) as string;
+  return JSON.parse(json) as TemplateInfo[];
+}
+
+async function createFromTemplate(templateId: string, title: string | null, url: string | null): Promise<CreatedRecord> {
+  const json = (await invoke("create_from_template_cmd", { templateId, title, url })) as string;
+  return JSON.parse(json) as CreatedRecord;
+}
+
+async function saveAsTemplate(sourceId: string, title: string | null): Promise<CreatedRecord> {
+  const json = (await invoke("save_as_template_cmd", { sourceId, title })) as string;
+  return JSON.parse(json) as CreatedRecord;
+}
+
 interface RecordMeta {
   id: string;
   type: string;
@@ -415,6 +443,12 @@ export default function App() {
   const [metaFingerprint, setMetaFingerprint] = createSignal<string | null>(null);
   const [metaNotice, setMetaNotice] = createSignal("");
   const [metaOpen, setMetaOpen] = createSignal(false);
+  const [templates, setTemplates] = createSignal<TemplateInfo[]>([]);
+  const [newOpen, setNewOpen] = createSignal(false);
+  const [newTemplate, setNewTemplate] = createSignal("");
+  const [newTitle, setNewTitle] = createSignal("");
+  const [newUrl, setNewUrl] = createSignal("");
+  const [newNotice, setNewNotice] = createSignal("");
   const [iconChoice, setIconChoice] = createSignal(localStorage.getItem("orchard.icon") || "flower");
   const [indentBlocks, setIndentBlocks] = createSignal(localStorage.getItem("orchard.indentBlocks") !== "false");
   const [settingsOpen, setSettingsOpen] = createSignal(false);
@@ -547,6 +581,7 @@ export default function App() {
   }
 
   const allSelected = () => records().length > 0 && records().every((r) => selected().has(r.id));
+  const selectedTemplate = () => templates().find((t) => t.id === newTemplate());
 
   function toggleAll() {
     setSelected(allSelected() ? new Set() : new Set(records().map((r) => r.id)));
@@ -579,6 +614,58 @@ export default function App() {
       }
     } catch (e) {
       setMoveNotice("Move failed: " + String(e));
+    }
+  }
+
+  async function loadTemplates() {
+    try {
+      const list = await fetchTemplates();
+      setTemplates(list);
+      if (!list.some((t) => t.id === newTemplate())) {
+        setNewTemplate(list[0]?.id || "");
+      }
+    } catch (e) {
+      setNewNotice("Could not read templates: " + String(e));
+    }
+  }
+
+  async function openNewPanel() {
+    setNewNotice("");
+    setNewOpen((open) => !open);
+    if (!newOpen()) return;
+    await loadTemplates();
+  }
+
+  async function createRecord() {
+    const templateId = newTemplate();
+    if (!templateId) {
+      setNewNotice("Choose a template first.");
+      return;
+    }
+    try {
+      const created = await createFromTemplate(
+        templateId,
+        newTitle().trim() || null,
+        newUrl().trim() || null,
+      );
+      setNewNotice("Created " + (created.record.title || created.record.id));
+      setNewTitle("");
+      setNewUrl("");
+      await load();
+      await toggle(created.record.id);
+      await loadTemplates();
+    } catch (e) {
+      setNewNotice("Create failed: " + String(e));
+    }
+  }
+
+  async function saveTemplate(id: string) {
+    try {
+      const created = await saveAsTemplate(id, null);
+      setBlockNotice(`Saved template: ${created.record.title || created.record.id}`);
+      await loadTemplates();
+    } catch (e) {
+      setBlockNotice("Save as template failed: " + String(e));
     }
   }
 
@@ -749,6 +836,7 @@ export default function App() {
 
   // initial load
   load();
+  loadTemplates();
 
   // persist + apply icon choice
   createEffect(() => {
@@ -776,7 +864,51 @@ export default function App() {
           onKeyDown={(e) => { if (e.key === "Enter") load(); }}
         />
         <button onClick={() => load()}>Search</button>
+        <button onClick={openNewPanel} title="Create a record from a template">New from template</button>
       </header>
+      <Show when={newOpen()}>
+        <div class="new-record">
+          <Show
+            when={templates().length > 0}
+            fallback={
+              <span class="hint">
+                No templates yet. Open a record and choose “Save as template”, or create a
+                record with <code>type: template</code> and a <code>target_type</code>.
+              </span>
+            }
+          >
+            <select value={newTemplate()} onChange={(e) => setNewTemplate(e.currentTarget.value)}>
+              <For each={templates()}>
+                {(t) => (
+                  <option value={t.id}>
+                    {t.title || t.id} → {t.target_type || "missing target_type"}
+                  </option>
+                )}
+              </For>
+            </select>
+            <input
+              placeholder="Title (blank uses the template title)"
+              value={newTitle()}
+              onInput={(e) => setNewTitle(e.currentTarget.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); createRecord(); } }}
+            />
+            <input
+              placeholder="URL (optional)"
+              value={newUrl()}
+              onInput={(e) => setNewUrl(e.currentTarget.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); createRecord(); } }}
+            />
+            <button class="primary" onClick={createRecord} disabled={!selectedTemplate()?.target_type}>Create</button>
+            <Show when={newTemplate() && !selectedTemplate()?.target_type}>
+              <span class="error">This template has no target_type; add one to its frontmatter.</span>
+            </Show>
+          </Show>
+          <Show when={newNotice()}>
+            <span class={newNotice().startsWith("Created") ? "hint status-ok" : "error"}>{newNotice()}</span>
+          </Show>
+          <button onClick={() => { setNewOpen(false); setNewNotice(""); }}>Close</button>
+        </div>
+      </Show>
       <Show when={settingsOpen()}>
         <div class="settings-modal" onClick={(e) => { if (e.target === e.currentTarget) setSettingsOpen(false); }}>
           <div class="settings-panel" onClick={(e) => e.stopPropagation()}>
@@ -1077,6 +1209,7 @@ export default function App() {
                     <button onClick={(e) => { e.stopPropagation(); redo(r.id); }} title="Redo the last undone block edit">Redo</button>
                     <button onClick={(e) => { e.stopPropagation(); openComposer(null); }} title="Add a block at the end of the body">Add block</button>
                     <button onClick={(e) => { e.stopPropagation(); startMove(r.id, r.folder); }} title="Move this record to another folder under Records/">Move…</button>
+                    <button onClick={(e) => { e.stopPropagation(); saveTemplate(r.id); }} title="Copy this record into a template for its type">Save as template</button>
                     <Show when={blockNotice()}>
                       <span class="error">{blockNotice()}</span>
                     </Show>

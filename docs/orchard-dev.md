@@ -81,7 +81,8 @@ contain `..` are ignored.
 
 `list_records`, `search`, `load_record`, `get_blocks`,
 `apply_block_edit_cmd`, `insert_block_cmd`, `delete_block_cmd`,
-`move_records_cmd`, `update_record_fields_cmd`, `undo_block_edit_cmd`,
+`move_records_cmd`, `update_record_fields_cmd`, `list_templates_cmd`,
+`create_from_template_cmd`, `save_as_template_cmd`, `undo_block_edit_cmd`,
 `redo_block_edit_cmd`, `records_root_path`,
 `register_native_host`, `get_block_types`, `get_settings`, `open_folder`,
 `set_registered_folders_cmd`, `set_records_root_cmd`, `set_naming_cmd`,
@@ -139,6 +140,26 @@ matches. Empty strings clear a field; tags are trimmed, de-duplicated and empty
 entries dropped. Moving a record or editing its body changes the fingerprint, so
 the view returns the new one with every session result and the UI keeps it
 current. Metadata changes update `modified` but are not on the block undo stack.
+
+## Templates
+
+A template is an ordinary record with `type: template` and a required
+`target_type`. `list_templates` returns `{ id, title, target_type,
+description, path }` for every template under `Records/`, including one with a
+missing target so the UI can report the broken declaration.
+
+`create_from_template_cmd({ templateId, title, url })` copies the template body
+and metadata into a new record of `target_type`. Identity, timestamps and folder
+are fresh; placement uses the target type's folder. `save_as_template_cmd({
+sourceId, title })` copies an existing record into a template for its own type
+and leaves the source untouched. A template cannot be saved as another template,
+which would make the target ambiguous.
+
+Placeholders are plain text: `{{id}}`, `{{title}}`, `{{url}}`, `{{host}}`,
+`{{slug}}`, `{{date}}` and `{{now}}`. They are substituted in the body and in
+string metadata, including unknown fields. An unknown or unclosed placeholder is
+left as written. The UI exposes `New from template` (template, title, URL) and
+`Save as template` inside a record.
 
 ## Naming
 

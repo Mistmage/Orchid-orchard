@@ -10,6 +10,7 @@ pub mod record;
 pub mod rules;
 pub mod session;
 pub mod storage;
+pub mod template;
 pub mod wal;
 
 pub use block::{
@@ -30,8 +31,13 @@ pub use record::Record;
 pub use rules::{Action, Condition, Rule, RuleSet, Value, apply_rules, parse_rules};
 pub use session::{OpenReport, RecordSession, fingerprint};
 pub use storage::{
-    Index, IndexEntry, delete_record, find_record_by_id, move_record_to_folder, normalize_folder,
-    read_record, read_record_with_mtime, rebuild_index, record_filename, record_path, records_dir,
-    search_records, slugify_title, write_record, write_record_if_unchanged,
+    Index, IndexEntry, delete_record, find_record_by_id, generate_record_id, host_of,
+    move_record_to_folder, normalize_folder, read_record, read_record_with_mtime, rebuild_index,
+    record_filename, record_path, records_dir, search_records, slugify_title, write_record,
+    write_record_if_unchanged,
+};
+pub use template::{
+    TEMPLATE_TYPE, TemplateInfo, create_from_template, is_template, list_templates,
+    save_as_template, substitute as substitute_template,
 };
 pub use wal::{Wal, WalEntry};

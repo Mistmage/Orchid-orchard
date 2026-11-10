@@ -56,6 +56,7 @@ Research candidate.
 - References: `parent`, `related`, `links`
 - Classification: `tags`, `categories`, `status`
 - Placement: `folder` (path relative to `Records/`; omit for the type folder)
+- Template: `target_type` (required when `type: template`; the type it produces)
 - Page: `url`
 - Browser metadata (optional, ephemeral, treated as hints): `open`, `position`,
   `tab_group`, `window_hint`
@@ -86,7 +87,11 @@ Property names are implicitly records internally (`status:` ≡ `[[status]]:`). 
 
 ## Record types
 
-`page`, `collection`, `bookmark`, `snapshot`, `note`, `snippet`. Types are conventions, not hardcoded.
+`page`, `collection`, `bookmark`, `snapshot`, `note`, `snippet`, `template`. Types are conventions, not hardcoded.
+
+A `template` record is a reusable mask: its body and metadata seed a new record
+of the declared `target_type`. Placeholders such as `{{title}}` and `{{host}}`
+are substituted when it is applied. See `docs/orchard-dev.md`.
 
 ## Collection body
 
@@ -107,6 +112,10 @@ Each item is a record ref (`[[id]]`) or a raw URL.
 ## File naming
 
 `<slug>--<id>.md`, slug frozen at creation from title (or URL host). Directory: `Records/<type>/`.
+
+New ids are `rec_` plus seven hex digits taken from the low end of a nanosecond
+timestamp. `generate_record_id` scans every record and retries until the id is
+unused; the clock only makes collisions unlikely, the scan prevents them.
 
 ## Index
 

@@ -155,7 +155,7 @@ pub fn slugify_title(title: Option<&str>, url: Option<&str>) -> String {
     }
 }
 
-fn host_of(url: &str) -> Option<&str> {
+pub fn host_of(url: &str) -> Option<&str> {
     let after = url.split("://").nth(1).unwrap_or(url);
     let host = after.split('/').next().unwrap_or(after);
     let host = host.split(':').next().unwrap_or(host);
@@ -165,6 +165,32 @@ fn host_of(url: &str) -> Option<&str> {
 pub fn record_filename(record: &Record) -> String {
     let slug = slugify_title(record.title.as_deref(), record.url.as_deref());
     format!("{}--{}.md", slug, record.id)
+}
+
+/// Generate a short id that no record under `Records/` uses yet. Nanoseconds
+/// keep ids unique in practice; the scan makes the guarantee, not the clock.
+///
+/// Only the *low* 28 bits of the timestamp are kept. Taking the leading hex
+/// digits instead would freeze the id for tens of seconds at a time, because
+/// the high bits of a nanosecond epoch change slowly.
+pub fn generate_record_id(records_root: &Path) -> String {
+    for _ in 0..10 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let candidate = format!("rec_{:07x}", (nanos as u64) & 0x0fff_ffff);
+        if find_record_by_id(records_root, &candidate).is_none() {
+            return candidate;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    // The clock is stuck or the ids were taken. Mix in a process-wide counter
+    // so repeated fallbacks cannot return the same id.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static FALLBACK: AtomicU64 = AtomicU64::new(0);
+    let n = FALLBACK.fetch_add(1, Ordering::Relaxed);
+    format!("rec_{:x}{:x}", std::process::id(), n)
 }
 
 pub fn records_dir(records_root: &Path, rtype: &str) -> PathBuf {
@@ -343,7 +369,7 @@ pub fn rebuild_index(records_root: &Path) -> Result<Index, Error> {
     Ok(Index { records })
 }
 
-fn walk_md(dir: &Path, cb: &mut dyn FnMut(&Path)) -> Result<(), Error> {
+pub(crate) fn walk_md(dir: &Path, cb: &mut dyn FnMut(&Path)) -> Result<(), Error> {
     if !dir.is_dir() {
         return Ok(());
     }
@@ -413,6 +439,17 @@ mod tests {
         let path = record_path(root, &record);
         write_record(&path, &record, Some("# Body\n\ntext")).unwrap();
         path
+    }
+
+    #[test]
+    fn generated_ids_are_short_and_unique() {
+        let dir = TempDir::new().unwrap();
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..50 {
+            let id = generate_record_id(dir.path());
+            assert!(id.starts_with("rec_"), "unexpected id: {id}");
+            assert!(seen.insert(id.clone()), "duplicate id: {id}");
+        }
     }
 
     #[test]

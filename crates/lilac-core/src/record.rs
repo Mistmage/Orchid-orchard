@@ -8,6 +8,11 @@ pub struct Record {
     pub id: String,
     #[serde(rename = "type")]
     pub r#type: String,
+    /// For a template record, the type the template produces. Declared data,
+    /// not a filename convention: `create_from_template` refuses a template
+    /// that leaves it empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<u32>,
 
@@ -79,6 +84,7 @@ impl Record {
         Self {
             id: id.into(),
             r#type: r#type.into(),
+            target_type: None,
             version: Some(1),
             title: None,
             icon: None,

@@ -1,7 +1,7 @@
 use lilac_core::session::{OpenReport, RecordSession};
 use lilac_core::{
-    Record, Wal, find_record_by_id, move_record_to_folder, normalize_folder, read_record,
-    rebuild_index, search_records,
+    Record, Wal, create_from_template, find_record_by_id, list_templates, move_record_to_folder,
+    normalize_folder, read_record, rebuild_index, save_as_template, search_records,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -433,6 +433,45 @@ fn update_record_fields_cmd(
 }
 
 #[tauri::command]
+fn list_templates_cmd() -> Result<String, String> {
+    let templates = list_templates(&records_root()).map_err(|e| e.to_string())?;
+    Ok(serde_json::to_string(&templates).unwrap_or_else(|_| "[]".to_string()))
+}
+
+#[tauri::command]
+fn create_from_template_cmd(
+    template_id: String,
+    title: Option<String>,
+    url: Option<String>,
+) -> Result<String, String> {
+    let root = records_root();
+    let (record, path) = create_from_template(
+        &root,
+        &template_id,
+        title.as_deref(),
+        url.as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "record": record,
+        "path": path.to_string_lossy(),
+    })
+    .to_string())
+}
+
+#[tauri::command]
+fn save_as_template_cmd(source_id: String, title: Option<String>) -> Result<String, String> {
+    let root = records_root();
+    let (record, path) = save_as_template(&root, &source_id, title.as_deref())
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "record": record,
+        "path": path.to_string_lossy(),
+    })
+    .to_string())
+}
+
+#[tauri::command]
 fn move_records_cmd(
     state: tauri::State<Sessions>,
     ids: Vec<String>,
@@ -496,6 +535,9 @@ pub fn run() {
             delete_block_cmd,
             move_records_cmd,
             update_record_fields_cmd,
+            list_templates_cmd,
+            create_from_template_cmd,
+            save_as_template_cmd,
             undo_block_edit_cmd,
             redo_block_edit_cmd,
             records_root_path,

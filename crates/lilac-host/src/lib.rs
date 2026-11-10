@@ -4,8 +4,8 @@ use base64::Engine;
 use config::{load_config, logs_dir, set_records_root};
 use lilac_core::{
     NamingConfig, NamingRule, Record, Wal, apply_block_edit, apply_rules as apply_rules_core,
-    delete_record, parse_rules, read_record, rebuild_index, record_path, search_records,
-    write_record,
+    delete_record, generate_record_id, parse_rules, read_record, rebuild_index, record_path,
+    search_records, write_record,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -142,7 +142,7 @@ fn dispatch(records_root: &std::path::Path, method: &str, params: Value) -> Resu
             let mut record: Record =
                 serde_json::from_value(record_val).map_err(|e| e.to_string())?;
             if record.id.trim().is_empty() {
-                record.id = generate_id(records_root);
+                record.id = generate_record_id(records_root);
             }
             let now = chrono::Utc::now().to_rfc3339();
             if record.created.is_none() {
@@ -363,24 +363,6 @@ fn dispatch(records_root: &std::path::Path, method: &str, params: Value) -> Resu
         }
         _ => Err(format!("unknown method: {}", method)),
     }
-}
-
-fn generate_id(records_root: &std::path::Path) -> String {
-    for _ in 0..10 {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let cand = format!("rec_{:x}", nanos as u64);
-        // shorten to 7 hex
-        let short = &cand[..std::cmp::min(cand.len(), "rec_".len() + 7)];
-        let candidate = short.to_string();
-        if find_record_path(records_root, &candidate).is_none() {
-            return candidate;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-    format!("rec_{}", chrono::Utc::now().timestamp_millis())
 }
 
 fn open_in_file_manager(path: &std::path::Path) -> Result<(), String> {

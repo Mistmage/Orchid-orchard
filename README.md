@@ -213,6 +213,18 @@ description. It writes only frontmatter and refuses a save when the file changed
 since the panel loaded, so it cannot silently overwrite a block edit or another
 program's change.
 
+## Templates
+
+`Save as template` copies an open record into a `type: template` record that
+declares its `target_type`. `New from template` then creates a record of that
+type from the template body and metadata. Identity, timestamps and placement are
+fresh, so every record starts as its own file.
+
+Templates support `{{title}}`, `{{url}}`, `{{host}}`, `{{slug}}`, `{{id}}`,
+`{{date}}` and `{{now}}` in the body and in string metadata. Unknown
+placeholders are left as written. Templates are ordinary records under
+`Records/template/`: edit, tag, move or delete them like anything else.
+
 ## Principles
 
 - Files are the database; indexes are caches.
