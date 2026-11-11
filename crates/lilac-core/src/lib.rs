@@ -1,5 +1,6 @@
 //! Lilac record storage core.
 
+pub mod base;
 pub mod block;
 pub mod block_types;
 pub mod collection;
@@ -14,6 +15,10 @@ pub mod storage;
 pub mod template;
 pub mod wal;
 
+pub use base::{
+    BASE_TYPE, BaseColumn, BaseRow, BaseSource, BaseSpec, BaseView, parse_base, render_base,
+    starter_document as base_starter_document,
+};
 pub use block::{
     Block, BlockKind, append_block, apply_block_edit, apply_block_edit_at_path, apply_block_edits,
     block_at_path, block_hash, delete_at_path, find_block, insert_after_path, parse_blocks,

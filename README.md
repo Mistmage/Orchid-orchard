@@ -180,6 +180,31 @@ Files are the database. The index is a cache and can always be rebuilt from
 disk. Records never store browser `window_id`/`tab_id`; browser data is only a
 hint used to propose placement.
 
+## Bases
+
+A base is a saved query that renders as a table. It is an ordinary record with
+`type: base`; the body is YAML:
+
+```yaml
+source:
+  type: book
+  tag: reading
+where: pages_total > pages_read
+columns:
+  - label: Title
+    expr: file.name
+  - status
+  - label: Pages left
+    expr: pages_total - pages_read
+sort: "-modified"
+limit: 100
+```
+
+`where`, column expressions and `sort` use the [formula
+language](docs/orchard-dev.md#formulas). Rendering only reads records; a failed
+cell is shown as a warning instead of hiding the row. Create one with **New
+base** in the header.
+
 ## Block type system
 
 Block structure is declared, not hardcoded. The registry lives in

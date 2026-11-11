@@ -280,3 +280,55 @@ Functions: `if`, `coalesce` / `default`, `now`, `today`, `min`, `max`, `sum`,
 
 Evaluation is pure apart from the clock in `now()` / `today()`. There is no
 filesystem or network access, so a shared `.base` file cannot execute anything.
+
+## Bases
+
+A base is a terminal view with its own rendering authority: the first *flower*.
+It is still an ordinary record with `type: base`, so it lives under
+`Records/base/`, is indexed like everything else, and needs no second database.
+Its body is a YAML query document; frontmatter remains ordinary metadata.
+
+```yaml
+source:
+  type: book
+  tag: reading
+  folder: Reading
+where: pages_total > pages_read
+columns:
+  - label: Title
+    expr: file.name
+  - status
+  - label: Pages left
+    expr: pages_total - pages_read
+sort: "-modified"
+limit: 100
+```
+
+`source` filters the index before any file is read. All fields are optional:
+`type` (exact, case-insensitive), `tag`, `folder` (the folder and its
+subfolders) and `path` (a case-insensitive substring of the stored path).
+
+`where`, every column `expr` and `sort` use the same formula language as rules.
+A bare string column (`- status`) uses the expression as its label; the object
+form adds a human label. `sort` is ascending unless it starts with `-`. `limit`
+must be greater than zero. A record whose cell fails (division by zero, a
+non-numeric string) still appears, with an empty cell and a warning, so one bad
+row cannot hide the rest.
+
+Omitting `columns` gives `file.name`, `status` and `file.folder`. Omitting the
+whole body gives a base over every record. Edits are validated before they are
+written: `save_base_source_cmd` refuses invalid YAML or an invalid expression and
+leaves the old definition in place.
+
+Commands:
+
+- `render_base_cmd({ id })` returns `{ source, view }`, where `view` is
+  `{ labels, rows, matched, scanned, warnings }`.
+- `save_base_source_cmd({ id, text, expectedSource })` validates, writes the
+  body, and returns the new view. `expectedSource` guards against overwriting a
+  definition changed by another program.
+- `create_base_cmd({ title })` creates a `type: base` record with a starter
+  document and returns its id.
+
+A base is read-only over other records: rendering never writes a file. That is
+the flower contract: it owns its presentation, not the data it projects.

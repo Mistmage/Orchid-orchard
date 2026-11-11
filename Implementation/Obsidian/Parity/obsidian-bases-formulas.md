@@ -26,7 +26,8 @@ once, so a future `.base` view can validate a file and evaluate it per row.
 Differences vs Orchid:
 - Orchid treats formulas as rules that can also *act* (add metadata, move folder),
   not just compute.
-- `.base` files supported as a type of Flower (terminal view with its own
-  rendering authority). Not built yet; the evaluator is ready for it.
+- Bases are records with `type: base` whose YAML body declares a source filter,
+  `where`, columns, `sort` and `limit`; Orchard renders them as a table. A
+  standalone `.base` extension is still planned.
 
 Tracked as refinement of T2.

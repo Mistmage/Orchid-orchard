@@ -238,6 +238,19 @@ interface AppliedRules {
   moved: boolean;
 }
 
+interface BaseViewData {
+  labels: string[];
+  rows: { id: string; title: string | null; path: string; cells: string[] }[];
+  matched: number;
+  scanned: number;
+  warnings: string[];
+}
+
+interface BaseRender {
+  source: string;
+  view: BaseViewData;
+}
+
 async function applyRules(id: string): Promise<AppliedRules> {
   const json = (await invoke("apply_rules_cmd", { id })) as string;
   return JSON.parse(json) as AppliedRules;
@@ -491,6 +504,12 @@ export default function App() {
   const [rulesDraft, setRulesDraft] = createSignal("");
   const [rulesMsg, setRulesMsg] = createSignal("");
   const [autoApplyRules, setAutoApplyRules] = createSignal(false);
+  const [newBaseOpen, setNewBaseOpen] = createSignal(false);
+  const [newBaseTitle, setNewBaseTitle] = createSignal("");
+  const [baseSource, setBaseSource] = createSignal("");
+  const [baseLoadedSource, setBaseLoadedSource] = createSignal("");
+  const [baseView, setBaseView] = createSignal<BaseViewData | null>(null);
+  const [baseNotice, setBaseNotice] = createSignal("");
   const [previewTitle, setPreviewTitle] = createSignal("Example page - GitHub");
   const [previewUrl, setPreviewUrl] = createSignal("https://github.com/org/repo");
   const [previewResult, setPreviewResult] = createSignal("");
@@ -759,6 +778,51 @@ export default function App() {
     }
   }
 
+  function openBase(id: string) {
+    setBaseNotice("");
+    invoke("render_base_cmd", { id })
+      .then((json) => {
+        const result = JSON.parse(json as string) as BaseRender;
+        setBaseSource(result.source);
+        setBaseLoadedSource(result.source);
+        setBaseView(result.view);
+      })
+      .catch((e) => setBaseNotice("Could not render base: " + String(e)));
+  }
+
+  async function saveBase(id: string) {
+    try {
+      const json = (await invoke("save_base_source_cmd", {
+        id,
+        text: baseSource(),
+        expectedSource: baseLoadedSource(),
+      })) as string;
+      const result = JSON.parse(json) as BaseRender;
+      setBaseSource(result.source);
+      setBaseLoadedSource(result.source);
+      setBaseView(result.view);
+      setBaseNotice("Saved and rendered.");
+      await load();
+    } catch (e) {
+      setBaseNotice("Save failed: " + String(e));
+    }
+  }
+
+  async function createBase() {
+    try {
+      const id = (await invoke("create_base_cmd", { title: newBaseTitle() })) as string;
+      setNewBaseOpen(false);
+      setNewBaseTitle("");
+      await load();
+      setExpanded(id);
+      setBlocks([]);
+      openBase(id);
+      setBaseNotice("Base created. Edit the YAML below, then choose Save & render.");
+    } catch (e) {
+      setBaseNotice("Could not create base: " + String(e));
+    }
+  }
+
   async function toggle(id: string) {
     setBlockNotice("");
     setComposerOpen(false);
@@ -766,6 +830,12 @@ export default function App() {
     setMetaOpen(false);
     if (expanded() === id) { setExpanded(null); setBlocks([]); return; }
     setExpanded(id);
+    const card = records().find((r) => r.id === id);
+    if (card && card.type.toLowerCase() === "base") {
+      setBlocks([]);
+      openBase(id);
+      return;
+    }
     try {
       const view = await fetchBlocks(id);
       setBlocks(view.blocks);
@@ -955,7 +1025,24 @@ export default function App() {
         />
         <button onClick={() => load()}>Search</button>
         <button onClick={openNewPanel} title="Create a record from a template">New from template</button>
+        <button onClick={() => { setNewBaseOpen(!newBaseOpen()); setBaseNotice(""); }} title="Create a base: a saved query rendered as a table">New base</button>
       </header>
+      <Show when={newBaseOpen()}>
+        <div class="new-record">
+          <input
+            placeholder="Base title (blank uses “New base”)"
+            value={newBaseTitle()}
+            onInput={(e) => setNewBaseTitle(e.currentTarget.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") createBase(); }}
+          />
+          <button class="primary" onClick={createBase}>Create base</button>
+          <button onClick={() => setNewBaseOpen(false)}>Cancel</button>
+          <span class="hint">
+            A base is a <code class="mono">type: base</code> record whose body is a YAML
+            query. It renders as a table; other records are never modified.
+          </span>
+        </div>
+      </Show>
       <Show when={newOpen()}>
         <div class="new-record">
           <Show
@@ -1368,6 +1455,79 @@ then move "Cooking"`}</pre>
               <div class="meta">{r.id} · {r.type}{r.status ? " · " + r.status : ""}</div>
               <div class="tags">{(r.tags || []).join(", ")}</div>
               <Show when={expanded() === r.id}>
+                <Show
+                  when={r.type.toLowerCase() !== "base"}
+                  fallback={
+                    <div class="blocks base-view" style={{ "margin-top": "8px", cursor: "default" }} onClick={(e) => e.stopPropagation()}>
+                      <div class="row" style={{ "margin-bottom": "6px" }}>
+                        <button onClick={() => openBase(r.id)} title="Re-run the query">Reload</button>
+                        <button onClick={() => startMove(r.id, r.folder)} title="Move this base to another folder under Records/">Move…</button>
+                        <button onClick={() => saveTemplate(r.id)} title="Copy this base into a template">Save as template</button>
+                        <button onClick={() => runRulesOn(r.id)} title="Apply the rules in Settings → Rules to this base now">Apply rules</button>
+                        <Show when={baseNotice()}>
+                          <span class={baseNotice().startsWith("Saved") || baseNotice().startsWith("Base created") ? "hint status-ok" : "error"}>
+                            {baseNotice()}
+                          </span>
+                        </Show>
+                      </div>
+                      <Show when={baseView()} fallback={<div class="hint">Loading the base…</div>}>
+                        {(v) => (
+                          <>
+                            <div class="hint">
+                              {v().rows.length} shown · {v().matched} matched · {v().scanned} scanned
+                            </div>
+                            <div class="base-table-wrap">
+                              <table class="base-table">
+                                <thead>
+                                  <tr><For each={v().labels}>{(label) => <th>{label}</th>}</For></tr>
+                                </thead>
+                                <tbody>
+                                  <For each={v().rows}>
+                                    {(row) => (
+                                      <tr title={row.path}>
+                                        <For each={row.cells}>{(cell) => <td>{cell || "—"}</td>}</For>
+                                      </tr>
+                                    )}
+                                  </For>
+                                </tbody>
+                              </table>
+                            </div>
+                            <Show when={v().rows.length === 0}>
+                              <div class="hint">No records matched this base yet.</div>
+                            </Show>
+                            <Show when={v().warnings.length > 0}>
+                              <details class="base-warnings">
+                                <summary>{v().warnings.length} warning{v().warnings.length === 1 ? "" : "s"}</summary>
+                                <ul>
+                                  <For each={v().warnings}>{(w) => <li class="error mono">{w}</li>}</For>
+                                </ul>
+                              </details>
+                            </Show>
+                          </>
+                        )}
+                      </Show>
+                      <details class="meta-editor" open>
+                        <summary>Definition (YAML body)</summary>
+                        <textarea
+                          class="rules-editor"
+                          rows={12}
+                          spellcheck={false}
+                          value={baseSource()}
+                          onInput={(e) => setBaseSource(e.currentTarget.value)}
+                        />
+                        <div class="row" style={{ "margin-top": "8px" }}>
+                          <button class="primary" onClick={() => saveBase(r.id)}>Save &amp; render</button>
+                          <button onClick={() => openBase(r.id)}>Discard changes</button>
+                          <span class="hint">
+                            Columns, <code class="mono">where</code> and <code class="mono">sort</code> use the
+                            same formula language as rules. Leading <code class="mono">-</code> on{" "}
+                            <code class="mono">sort</code> means descending.
+                          </span>
+                        </div>
+                      </details>
+                    </div>
+                  }
+                >
                 <div class="blocks" style={{ "margin-top": "8px", cursor: "default" }} onClick={(e) => e.stopPropagation()}>
                   <div class="row" style={{ "margin-bottom": "6px" }}>
                     <button onClick={(e) => { e.stopPropagation(); undo(r.id); }} title="Undo the last block edit">Undo</button>
@@ -1449,6 +1609,7 @@ then move "Cooking"`}</pre>
                     )}
                   </For>
                 </div>
+                </Show>
               </Show>
             </div>
           )}

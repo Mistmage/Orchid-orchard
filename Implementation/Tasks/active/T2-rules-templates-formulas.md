@@ -46,11 +46,17 @@ Shipped:
 - `compute field = <expression>` rule action. Evaluation errors are reported via
   `apply_rules_reported`, logged to the WAL by the host and shown in Orchard,
   but never block a save. Metadata-only results no longer rename a file.
+- Bases: a record with `type: base` whose YAML body declares `source` filters,
+  a `where` formula, columns, `sort` and `limit`. `crates/lilac-core/src/base.rs`
+  parses/validates once and renders against the index; it reads other records but
+  never writes them. Orchard renders the table, a warnings list and a definition
+  editor; `New base` creates one. This is the first Flower.
 
 Remaining:
 
-- `.base` files supported as a type of Flower, rendered from a validated
-  formula once and evaluated per row.
+- First-class `.base` files (the extension, not only a `type: base` record), so a
+  YAML file dropped into a registered folder opens as a flower.
+- Multiple named views per base and explicit view types (table is the only one).
 - Template variables that read another record/property (today placeholders are
   values of the new record only).
 - Formula lookups across records (needs an index-aware evaluation context).

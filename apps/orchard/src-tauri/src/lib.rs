@@ -1,8 +1,9 @@
 use lilac_core::session::{OpenReport, RecordSession};
 use lilac_core::{
-    Record, Wal, apply_rules_reported as apply_rules_core, create_from_template,
-    find_record_by_id, list_templates, move_record_to_folder, normalize_folder, parse_rules,
-    read_record, record_path, rebuild_index, save_as_template, search_records, write_record,
+    Record, Wal, BASE_TYPE, apply_rules_reported as apply_rules_core, base_starter_document,
+    create_from_template, find_record_by_id, generate_record_id, list_templates,
+    move_record_to_folder, normalize_folder, parse_base, parse_rules, read_record, record_path,
+    rebuild_index, render_base, save_as_template, search_records, write_record,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -584,6 +585,67 @@ fn apply_rules_cmd(state: tauri::State<Sessions>, id: String) -> Result<String, 
 }
 
 #[tauri::command]
+fn render_base_cmd(id: String) -> Result<String, String> {
+    let root = records_root();
+    let path = find_record_by_id(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
+    let (record, body) = read_record(&path).map_err(|e| e.to_string())?;
+    if !record.r#type.eq_ignore_ascii_case(BASE_TYPE) {
+        return Err(format!("{} is not a base (type {})", id, record.r#type));
+    }
+    let source = body.unwrap_or_default();
+    let spec = parse_base(&source)?;
+    let view = render_base(&root, &spec).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "source": source, "view": view }).to_string())
+}
+
+#[tauri::command]
+fn save_base_source_cmd(
+    id: String,
+    text: String,
+    expected_source: Option<String>,
+) -> Result<String, String> {
+    let root = records_root();
+    let path = find_record_by_id(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
+    let (mut record, body) = read_record(&path).map_err(|e| e.to_string())?;
+    if !record.r#type.eq_ignore_ascii_case(BASE_TYPE) {
+        return Err(format!("{} is not a base (type {})", id, record.r#type));
+    }
+    // A base is still a file another program may have changed. Refuse to
+    // overwrite a definition the user has not seen.
+    let current = body.unwrap_or_default();
+    if let Some(expected) = expected_source {
+        if current != expected {
+            return Err("base changed since it was loaded; reopen it before saving".into());
+        }
+    }
+    let spec = parse_base(&text)?;
+    record.modified = Some(chrono::Utc::now().to_rfc3339());
+    write_record(&path, &record, Some(&text)).map_err(|e| e.to_string())?;
+    let view = render_base(&root, &spec).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "source": text, "view": view }).to_string())
+}
+
+#[tauri::command]
+fn create_base_cmd(title: String) -> Result<String, String> {
+    let root = records_root();
+    let id = generate_record_id(&root);
+    let mut record = Record::new(id.clone(), BASE_TYPE);
+    let title = title.trim();
+    record.title = Some(if title.is_empty() {
+        "New base".to_string()
+    } else {
+        title.to_string()
+    });
+    let now = chrono::Utc::now().to_rfc3339();
+    record.created = Some(now.clone());
+    record.modified = Some(now);
+    let path = record_path(&root, &record);
+    let body = base_starter_document(record.title.as_deref().unwrap_or("New base"));
+    write_record(&path, &record, Some(&body)).map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+#[tauri::command]
 fn move_records_cmd(
     state: tauri::State<Sessions>,
     ids: Vec<String>,
@@ -654,6 +716,9 @@ pub fn run() {
             set_rules_cmd,
             set_auto_apply_rules_cmd,
             apply_rules_cmd,
+            render_base_cmd,
+            save_base_source_cmd,
+            create_base_cmd,
             undo_block_edit_cmd,
             redo_block_edit_cmd,
             records_root_path,
