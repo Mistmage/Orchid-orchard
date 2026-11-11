@@ -27,6 +27,16 @@ interface Settings {
   registered_folders: string[];
   extension_id: string;
   naming: NamingConfig;
+  auto_apply_rules: boolean;
+  rules_path: string;
+}
+
+interface RulesInfo {
+  path: string;
+  text: string;
+  rules: number;
+  error: string | null;
+  auto_apply: boolean;
 }
 
 interface NamingRule {
@@ -214,6 +224,22 @@ async function createFromTemplate(templateId: string, title: string | null, url:
 async function saveAsTemplate(sourceId: string, title: string | null): Promise<CreatedRecord> {
   const json = (await invoke("save_as_template_cmd", { sourceId, title })) as string;
   return JSON.parse(json) as CreatedRecord;
+}
+
+async function fetchRules(): Promise<RulesInfo> {
+  return (await invoke("get_rules_cmd")) as RulesInfo;
+}
+
+interface AppliedRules {
+  record: RecordMeta;
+  path: string;
+  fired: string[];
+  moved: boolean;
+}
+
+async function applyRules(id: string): Promise<AppliedRules> {
+  const json = (await invoke("apply_rules_cmd", { id })) as string;
+  return JSON.parse(json) as AppliedRules;
 }
 
 interface RecordMeta {
@@ -458,8 +484,12 @@ export default function App() {
   const [extDraft, setExtDraft] = createSignal("");
   const [settingsMsg, setSettingsMsg] = createSignal("");
   const [blockTypes, setBlockTypes] = createSignal<BlockTypeReport | null>(null);
-  const [settingsTab, setSettingsTab] = createSignal<"orchid" | "storage" | "lilac" | "naming" | "blocks">("orchid");
+  const [settingsTab, setSettingsTab] = createSignal<"orchid" | "storage" | "lilac" | "naming" | "rules" | "blocks">("orchid");
   const [namingDraft, setNamingDraft] = createSignal<NamingConfig>(emptyNaming());
+  const [rulesInfo, setRulesInfo] = createSignal<RulesInfo | null>(null);
+  const [rulesDraft, setRulesDraft] = createSignal("");
+  const [rulesMsg, setRulesMsg] = createSignal("");
+  const [autoApplyRules, setAutoApplyRules] = createSignal(false);
   const [previewTitle, setPreviewTitle] = createSignal("Example page - GitHub");
   const [previewUrl, setPreviewUrl] = createSignal("https://github.com/org/repo");
   const [previewResult, setPreviewResult] = createSignal("");
@@ -470,8 +500,21 @@ export default function App() {
     setRootDraft(s.records_root);
     setExtDraft(s.extension_id || "");
     setNamingDraft(cloneNaming(s.naming || emptyNaming()));
+    setAutoApplyRules(s.auto_apply_rules);
+    await refreshRules();
     const bt = (await invoke("get_block_types")) as BlockTypeReport;
     setBlockTypes(bt);
+  }
+
+  async function refreshRules() {
+    try {
+      const info = await fetchRules();
+      setRulesInfo(info);
+      setRulesDraft(info.text);
+      setAutoApplyRules(info.auto_apply);
+    } catch (e) {
+      setRulesMsg("Could not read rules: " + String(e));
+    }
   }
 
   async function openSettings() {
@@ -538,6 +581,48 @@ export default function App() {
       setPreviewResult(title);
     } catch (e) {
       setPreviewResult("Error: " + e);
+    }
+  }
+
+  async function saveRules() {
+    try {
+      const info = (await invoke("set_rules_cmd", { text: rulesDraft() })) as {
+        path: string;
+        rules: number;
+      };
+      setRulesMsg(`Saved ${info.rules} rule${info.rules === 1 ? "" : "s"}.`);
+      await refreshRules();
+    } catch (e) {
+      // The Rust parser refused the file, so the old rules are still active.
+      setRulesMsg("Not saved: " + String(e));
+    }
+  }
+
+  async function toggleAutoApply(enabled: boolean) {
+    try {
+      setAutoApplyRules(enabled);
+      await invoke("set_auto_apply_rules_cmd", { enabled });
+      setRulesMsg(enabled ? "Rules will run on every browser save." : "Automatic rules are off.");
+      await refreshRules();
+    } catch (e) {
+      setAutoApplyRules(!enabled);
+      setRulesMsg("Could not change scheduling: " + String(e));
+    }
+  }
+
+  async function runRulesOn(id: string) {
+    try {
+      const result = await applyRules(id);
+      setBlockNotice(
+        result.fired.length === 0
+          ? "No rules matched."
+          : `Applied ${result.fired.length} action${result.fired.length === 1 ? "" : "s"}` +
+            (result.moved ? "; record moved" : ""),
+      );
+      await load();
+      await reloadBlocks(id);
+    } catch (e) {
+      setBlockNotice("Apply rules failed: " + String(e));
     }
   }
 
@@ -922,6 +1007,7 @@ export default function App() {
               <button class={"tab " + (settingsTab() === "storage" ? "active" : "")} onClick={() => setSettingsTab("storage")}>Storage</button>
               <button class={"tab " + (settingsTab() === "lilac" ? "active" : "")} onClick={() => setSettingsTab("lilac")}>Lilac</button>
               <button class={"tab " + (settingsTab() === "naming" ? "active" : "")} onClick={() => setSettingsTab("naming")}>Naming</button>
+              <button class={"tab " + (settingsTab() === "rules" ? "active" : "")} onClick={() => setSettingsTab("rules")}>Rules</button>
               <button class={"tab " + (settingsTab() === "blocks" ? "active" : "")} onClick={() => setSettingsTab("blocks")}>Block types</button>
             </div>
 
@@ -1120,6 +1206,73 @@ export default function App() {
                 </div>
               </Show>
 
+              <Show when={settingsTab() === "rules"}>
+                <section class="settings-section">
+                  <h3>Rules file</h3>
+                  <div class="hint">
+                    One rule is <code class="mono">when &lt;condition&gt;</code>{" "}
+                    plus one or more <code class="mono">then &lt;action&gt;</code> lines.
+                    Conditions combine with <code class="mono">and</code>,{" "}
+                    <code class="mono">or</code> and <code class="mono">not</code>; actions
+                    are <code class="mono">set</code>, <code class="mono">add tag</code>,{" "}
+                    <code class="mono">remove tag</code>, <code class="mono">move</code> and{" "}
+                    <code class="mono">delete</code>.
+                  </div>
+                  <div class="hint">
+                    Limit a rule to a site with <code class="mono">for "*.example.com"</code>.
+                    Derived fields available to conditions:{" "}
+                    <code class="mono">host</code>, <code class="mono">domain</code>,{" "}
+                    <code class="mono">folder</code>, <code class="mono">tags</code>,{" "}
+                    <code class="mono">created</code>, <code class="mono">modified</code>.
+                    Use <code class="mono">host matches "*.youtube.com"</code> for a glob.
+                  </div>
+                  <textarea
+                    class="rules-editor"
+                    rows={16}
+                    spellcheck={false}
+                    value={rulesDraft()}
+                    onInput={(e) => setRulesDraft(e.currentTarget.value)}
+                  />
+                  <div class="row">
+                    <button class="primary" onClick={saveRules}>Save rules</button>
+                    <label class="row" style={{ gap: "6px" }}>
+                      <input
+                        type="checkbox"
+                        checked={autoApplyRules()}
+                        onChange={(e) => toggleAutoApply(e.currentTarget.checked)}
+                      />
+                      <span>Apply automatically when the browser saves a page</span>
+                    </label>
+                  </div>
+                  <Show when={rulesInfo()?.error}>
+                    <div class="error">Parse error: {rulesInfo()!.error}</div>
+                  </Show>
+                  <Show when={rulesMsg()}>
+                    <div class={rulesMsg().startsWith("Not saved") || rulesMsg().startsWith("Could not") ? "error" : "hint status-ok"}>
+                      {rulesMsg()}
+                    </div>
+                  </Show>
+                  <div class="hint mono">{rulesInfo()?.path || settings()?.rules_path || "…"}</div>
+                  <div class="hint">
+                    {rulesInfo() ? `${rulesInfo()!.rules} parsed rule${rulesInfo()!.rules === 1 ? "" : "s"}` : "…"}
+                    {" · "}a file that does not parse is never written.
+                  </div>
+                </section>
+                <section class="settings-section">
+                  <h3>Syntax</h3>
+                  <pre class="rules-example">{`rule "YouTube" for "*.youtube.com":
+when tag "video"
+then set status = "Video"
+then add tag "watch-later"
+
+when host == "github.com" and status != "Archived"
+then add tag "code"
+
+when title contains "recipe"
+then move "Cooking"`}</pre>
+                </section>
+              </Show>
+
               <Show when={settingsTab() === "blocks"}>
                 <section class="settings-section">
                   <h3>Declared block types</h3>
@@ -1210,6 +1363,7 @@ export default function App() {
                     <button onClick={(e) => { e.stopPropagation(); openComposer(null); }} title="Add a block at the end of the body">Add block</button>
                     <button onClick={(e) => { e.stopPropagation(); startMove(r.id, r.folder); }} title="Move this record to another folder under Records/">Move…</button>
                     <button onClick={(e) => { e.stopPropagation(); saveTemplate(r.id); }} title="Copy this record into a template for its type">Save as template</button>
+                    <button onClick={(e) => { e.stopPropagation(); runRulesOn(r.id); }} title="Apply the rules in Settings → Rules to this record now">Apply rules</button>
                     <Show when={blockNotice()}>
                       <span class="error">{blockNotice()}</span>
                     </Show>

@@ -4,6 +4,7 @@
 //! rules: strip noise, replace, affix, truncate. Pure logic, no I/O.
 
 use crate::record::Record;
+use crate::storage::host_of;
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct NamingRule {
@@ -59,21 +60,30 @@ impl NamingConfig {
 
     /// First per-domain rule matching `host`, if any.
     pub fn rule_for_host(&self, host: &str) -> Option<&NamingRule> {
-        let host = normalise_host(host);
+        let host = normalize_host(host);
         self.domains
             .iter()
-            .find(|d| domain_matches(&host, &d.domain))
+            .find(|d| host_matches(&host, &d.domain))
             .map(|d| &d.rule)
     }
 }
 
-fn normalise_host(host: &str) -> String {
+/// Canonical comparison form of a host: trimmed, lower-case, no trailing dot,
+/// and with a leading `www.` removed. Both record URLs and user-written
+/// patterns go through this, so `www.Example.com` and `example.com` agree.
+pub fn normalize_host(host: &str) -> String {
     let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
     host.strip_prefix("www.").unwrap_or(&host).to_string()
 }
 
-fn domain_matches(host: &str, pattern: &str) -> bool {
-    let pattern = normalise_host(pattern);
+/// Does `host` match a domain pattern?
+///
+/// `github.com` matches exactly. `*.github.com` matches `github.com` itself and
+/// every subdomain, which is what people mean by "the GitHub family". A leading
+/// `www.` is ignored on both sides.
+pub fn host_matches(host: &str, pattern: &str) -> bool {
+    let host = normalize_host(host);
+    let pattern = normalize_host(pattern);
     if pattern.is_empty() {
         return false;
     }
@@ -155,13 +165,6 @@ fn non_empty(value: String) -> String {
     } else {
         value
     }
-}
-
-fn host_of(url: &str) -> Option<&str> {
-    let after = url.split("://").nth(1).unwrap_or(url);
-    let host = after.split('/').next().unwrap_or(after);
-    let host = host.split(':').next().unwrap_or(host);
-    if host.is_empty() { None } else { Some(host) }
 }
 
 #[cfg(test)]

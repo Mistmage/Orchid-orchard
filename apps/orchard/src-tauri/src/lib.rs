@@ -1,7 +1,8 @@
 use lilac_core::session::{OpenReport, RecordSession};
 use lilac_core::{
-    Record, Wal, create_from_template, find_record_by_id, list_templates, move_record_to_folder,
-    normalize_folder, read_record, rebuild_index, save_as_template, search_records,
+    Record, Wal, apply_rules as apply_rules_core, create_from_template, find_record_by_id,
+    list_templates, move_record_to_folder, normalize_folder, parse_rules, read_record, record_path,
+    rebuild_index, save_as_template, search_records, write_record,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -213,6 +214,8 @@ fn get_settings() -> serde_json::Value {
         "registered_folders": folders,
         "extension_id": orchid.extension_id.clone().unwrap_or_default(),
         "naming": cfg.naming,
+        "auto_apply_rules": cfg.rules.auto_apply,
+        "rules_path": lilac_host::config::rules_path().to_string_lossy(),
     })
 }
 
@@ -471,6 +474,113 @@ fn save_as_template_cmd(source_id: String, title: Option<String>) -> Result<Stri
     .to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Rules
+// ---------------------------------------------------------------------------
+
+/// Read `rules.txt`, its parse state and the current scheduling switch. The
+/// text is the source of truth; a parse error is reported instead of hidden.
+#[tauri::command]
+fn get_rules_cmd() -> serde_json::Value {
+    let path = lilac_host::config::rules_path();
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let (count, error) = match parse_rules(&text) {
+        Ok(set) => (set.rules.len(), serde_json::Value::Null),
+        Err(e) => (0, serde_json::json!(e)),
+    };
+    let auto_apply = lilac_host::config::load_config().0.rules.auto_apply;
+    serde_json::json!({
+        "path": path.to_string_lossy(),
+        "text": text,
+        "rules": count,
+        "error": error,
+        "auto_apply": auto_apply,
+    })
+}
+
+/// Replace `rules.txt` after validating it. An invalid file is never written,
+/// so a typo in the editor cannot disable rules on the next browser save.
+#[tauri::command]
+fn set_rules_cmd(text: String) -> Result<serde_json::Value, String> {
+    let set = parse_rules(&text)?;
+    let path = lilac_host::config::rules_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, text).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "path": path.to_string_lossy(),
+        "rules": set.rules.len(),
+    }))
+}
+
+#[tauri::command]
+fn set_auto_apply_rules_cmd(enabled: bool) -> Result<bool, String> {
+    let mut cfg = lilac_host::config::load_config().0;
+    cfg.rules.auto_apply = enabled;
+    lilac_host::config::save_config(&cfg)?;
+    Ok(enabled)
+}
+
+/// Apply the current rules to one stored record, writing metadata and moving
+/// the file when a `move` action fires. The open session (if any) is dropped so
+/// the next view reads the new file instead of a stale path.
+#[tauri::command]
+fn apply_rules_cmd(state: tauri::State<Sessions>, id: String) -> Result<String, String> {
+    let root = records_root();
+    let mut sessions = state
+        .0
+        .lock()
+        .map_err(|_| "session lock poisoned".to_string())?;
+    let path = find_record_by_id(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
+    let (mut record, body) = read_record(&path).map_err(|e| e.to_string())?;
+    let folder_before = record.folder.clone();
+    let text = std::fs::read_to_string(lilac_host::config::rules_path()).unwrap_or_default();
+    let ruleset = parse_rules(&text)?;
+    let fired = apply_rules_core(&mut record, &ruleset.rules);
+    if fired.is_empty() {
+        return Ok(serde_json::json!({
+            "record": record,
+            "path": path.to_string_lossy(),
+            "fired": Vec::<String>::new(),
+            "moved": false,
+        })
+        .to_string());
+    }
+    if let Some(folder) = record.folder.clone() {
+        match normalize_folder(&folder) {
+            Ok(None) => record.folder = None,
+            Ok(Some(f)) if f == record.r#type => record.folder = None,
+            Ok(f) => record.folder = f,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    record.modified = Some(chrono::Utc::now().to_rfc3339());
+    // Only placement changes should rename or relocate a file. Recomputing the
+    // slug after a metadata-only rule would silently rename an imported or
+    // hand-named record.
+    let destination = if record.folder == folder_before {
+        path.clone()
+    } else {
+        record_path(&root, &record)
+    };
+    if destination != path {
+        write_record(&destination, &record, body.as_deref()).map_err(|e| e.to_string())?;
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    } else {
+        write_record(&path, &record, body.as_deref()).map_err(|e| e.to_string())?;
+    }
+    sessions.remove(&id);
+    let fired: Vec<String> = fired.iter().map(|a| format!("{:?}", a)).collect();
+    Ok(serde_json::json!({
+        "record": record,
+        "path": destination.to_string_lossy(),
+        "fired": fired,
+        "moved": destination != path,
+    })
+    .to_string())
+}
+
 #[tauri::command]
 fn move_records_cmd(
     state: tauri::State<Sessions>,
@@ -538,6 +648,10 @@ pub fn run() {
             list_templates_cmd,
             create_from_template_cmd,
             save_as_template_cmd,
+            get_rules_cmd,
+            set_rules_cmd,
+            set_auto_apply_rules_cmd,
+            apply_rules_cmd,
             undo_block_edit_cmd,
             redo_block_edit_cmd,
             records_root_path,

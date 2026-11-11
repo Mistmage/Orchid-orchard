@@ -172,3 +172,57 @@ A matched override replaces the global rules rather than adding to them.
 The host's `derive_title` uses the saved config when the message has no `rule`,
 so Settings is authoritative for the extension. An explicit `rule` from an
 older client is still honoured.
+
+## Rules
+
+`lilac_core::rules` parses `~/.orchard/.lilac/rules.txt` and applies actions to
+record metadata. A rule is one `when` line and one or more `then` lines, separated
+from the next rule by a blank line:
+
+```text
+rule "YouTube" for "*.youtube.com":
+when tag "video"
+then set status = "Video"
+then add tag "watch-later"
+
+when host == "github.com" and status != "Archived"
+then add tag "code"
+```
+
+`rule "name"` is optional, as is `for "<host pattern>"`. The scope uses the same
+matching as naming: `www.` is ignored, `example.com` is exact, and
+`*.example.com` includes the root and every subdomain. A scoped rule never runs
+for a record without a URL.
+
+Conditions support `and`, `or`, `not`, parentheses, `tag "x"`, `==`, `!=`,
+`contains`, `has`, `matches` and `like`. `contains` and `has` compare text
+without regard to case. `matches` and `like` are case-insensitive globs with `*`
+and `?`. Besides stored frontmatter, conditions can read derived fields:
+`host` / `domain` / `site` (from `url`), `folder`, `tags`, `created` and
+`modified`. Derived fields are never written, so the URL remains the only source
+of truth for a site.
+
+Actions are `set field = value`, `add tag "x"`, `remove tag "x"`,
+`move "folder"` and `delete` (which marks `_deleted: true` instead of removing a
+file during a rule pass). A `set` on a list field (`tags`, `categories`,
+`related`, `links`) splits the value on commas; `set folder` is equivalent to
+`move`. Rules run in file order; a later rule sees the changes made by an
+earlier one.
+
+There are two scheduling paths:
+
+- **On browser save.** When `rules.auto_apply` is true in the Lilac config, the
+  host applies `rules.txt` to each newly saved record before choosing its path,
+  so a `move` action decides where the file lands. The switch is off by default
+  and is edited in **Settings → Rules**. A rules file that fails to parse never
+  blocks a save; the error is appended to the WAL and the record is stored
+  unchanged.
+- **On demand.** `apply_rules_cmd({ id })` applies the file to one stored record
+  from Orchard, writes the metadata, and moves the file when a `move` action
+  fires. The open session is dropped so the next view reads the new path.
+
+The GUI reads and writes the same file through `get_rules_cmd`, `set_rules_cmd`
+and `set_auto_apply_rules_cmd`. `set_rules_cmd` validates before writing, so a
+typo in the editor cannot disable the old rules. The extension popup's
+`Apply rules` sends its record to the host `apply_rules` command, which uses the
+saved file unless an explicit `rules` string is supplied.

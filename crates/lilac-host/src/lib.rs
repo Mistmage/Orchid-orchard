@@ -4,8 +4,8 @@ use base64::Engine;
 use config::{load_config, logs_dir, set_records_root};
 use lilac_core::{
     NamingConfig, NamingRule, Record, Wal, apply_block_edit, apply_rules as apply_rules_core,
-    delete_record, generate_record_id, parse_rules, read_record, rebuild_index, record_path,
-    search_records, write_record,
+    delete_record, generate_record_id, normalize_folder, parse_rules, read_record, rebuild_index,
+    record_path, search_records, write_record,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -150,6 +150,36 @@ fn dispatch(records_root: &std::path::Path, method: &str, params: Value) -> Resu
             }
             if record.modified.is_none() {
                 record.modified = Some(now);
+            }
+            // Rules run on the new record before its path is chosen, so a
+            // `move` action decides where the file lands. A broken rules file
+            // never blocks a save: it is logged and skipped.
+            if load_config().0.rules.auto_apply {
+                let text = std::fs::read_to_string(config::rules_path()).unwrap_or_default();
+                if !text.trim().is_empty() {
+                    match parse_rules(&text) {
+                        Ok(ruleset) => {
+                            apply_rules_core(&mut record, &ruleset.rules);
+                        }
+                        Err(e) => {
+                            let mut wal = Wal::new(config::config_root().join("wal.log"));
+                            let _ = wal.append(
+                                "rules_parse_error",
+                                serde_json::json!({ "record": record.id, "error": e }),
+                            );
+                        }
+                    }
+                }
+                // A rule-owned folder is user input too: reject escapes rather
+                // than letting the save fail or silently write outside.
+                if let Some(folder) = record.folder.clone() {
+                    match normalize_folder(&folder) {
+                        Ok(None) => record.folder = None,
+                        Ok(Some(f)) if f == record.r#type => record.folder = None,
+                        Ok(f) => record.folder = f,
+                        Err(_) => record.folder = None,
+                    }
+                }
             }
             let body = params.get("body").and_then(|v| v.as_str());
             let path = record_path(records_root, &record);

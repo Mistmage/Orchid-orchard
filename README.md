@@ -108,8 +108,8 @@ The default registered folders are the standard record types: `page`,
 `<records_root>/Records/`. An unreadable or corrupted config is salvaged for
 its last `records_root` value and rewritten cleanly on load.
 
-The GUI's Settings dialog has separate tabs for Orchid, Storage, Lilac, Naming
-and the live block type registry.
+The GUI's Settings dialog has separate tabs for Orchid, Storage, Lilac, Naming,
+Rules and the live block type registry.
 
 ## Naming
 
@@ -127,6 +127,31 @@ in the same `config.yaml` under `naming` and are edited in **Settings → Naming
 Orchard is authoritative. The browser extension asks the host to derive a title
 and sends no rule, so editing naming in Settings changes what Lilac saves. An
 older client that still sends an explicit `rule` keeps working: that rule wins.
+
+## Rules
+
+`Settings → Rules` edits `~/.orchard/.lilac/rules.txt` and shows parse errors
+before saving. A rule has one `when` condition and one or more `then` actions:
+
+```text
+rule "YouTube" for "*.youtube.com":
+when tag "video"
+then set status = "Video"
+then add tag "watch-later"
+```
+
+`for "*.example.com"` limits a rule to a site (the same matching as naming:
+`www.` ignored, `*.` includes subdomains). Conditions combine with `and`, `or`
+and `not`, and can use `tag`, `==`, `!=`, `contains`, `has`, `matches` and `like`.
+`contains`/`has` ignore case; `matches` supports `*` and `?` globs.
+Derived fields `host`, `domain`, `folder`, `tags`, `created` and `modified` are
+available without storing them. Actions are `set`, `add tag`, `remove tag`,
+`move` and `delete`.
+
+Turn on **Apply automatically when the browser saves a page** to run the rules
+on each new record; a `move` action chooses the folder before the file is
+written. `Apply rules` in an open record runs them on demand. A file that does
+not parse is never saved, and a parse error never blocks a browser save.
 
 ## Records
 

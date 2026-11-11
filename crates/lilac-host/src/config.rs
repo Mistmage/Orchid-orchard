@@ -32,6 +32,18 @@ pub struct Config {
     pub registered_folders: Vec<String>,
     #[serde(default)]
     pub naming: NamingConfig,
+    #[serde(default)]
+    pub rules: RuleRuntimeConfig,
+}
+
+/// Runtime switches for the rules in `rules.txt`. Rule *text* stays in a plain
+/// file the user can edit; this only decides when it runs.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RuleRuntimeConfig {
+    /// Apply `rules.txt` to every record the browser saves. Off by default so a
+    /// new install never rewrites records before the user has seen the rules.
+    #[serde(default)]
+    pub auto_apply: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -51,6 +63,7 @@ impl Default for Config {
             records_root: None,
             registered_folders: Vec::new(),
             naming: NamingConfig::default(),
+            rules: RuleRuntimeConfig::default(),
         }
     }
 }

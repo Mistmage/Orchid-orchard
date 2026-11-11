@@ -1,12 +1,17 @@
 //! Minimal rule engine for Lilac records.
 //!
 //! A rule is: `when <condition> then <action>` (possibly multiple `then`).
+//! A rule may be limited to a site with `for "*.example.com"`; the scope uses
+//! the same matching as naming rules (`www.` ignored, `*.` includes subdomains).
 //! Conditions combine with `and` / `or` / `not` and atoms:
 //!     - `true` / `false`
 //!     - `tag "x"` (record has tag x)
 //!     - `field == "value"` / `field != "value"`
 //!     - `field contains "value"` / `field has "value"`
+//!     - `field matches "*.example.com"` (case-insensitive glob, `*` and `?`)
 //!     - parenthesized groups
+//! Derived fields include `host` / `domain` (from the URL), `folder`, `tags`,
+//! `created` and `modified`, so a per-site rule rarely needs a scope line.
 //! Actions:
 //!     - `set field = value`
 //!     - `add tag "x"`
@@ -17,7 +22,9 @@
 //! Syntax is intentionally minimal and subject to change; the engine is the
 //! stable part.
 
+use crate::naming::{host_matches, normalize_host};
 use crate::record::Record;
+use crate::storage::host_of;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -34,6 +41,7 @@ pub enum Condition {
     Ne(String, Value),
     Contains(String, String),
     HasTag(String),
+    Matches(String, String),
     And(Box<Condition>, Box<Condition>),
     Or(Box<Condition>, Box<Condition>),
     Not(Box<Condition>),
@@ -51,6 +59,8 @@ pub enum Action {
 #[derive(Debug, Clone)]
 pub struct Rule {
     pub name: Option<String>,
+    /// Optional host pattern; `None` or empty applies everywhere.
+    pub scope: Option<String>,
     pub when: Condition,
     pub then: Vec<Action>,
 }
@@ -61,9 +71,17 @@ pub struct RuleSet {
 }
 
 /// Apply rules to a record in order. Returns the actions that fired.
+///
+/// A rule with a `scope` only runs when the record has a URL whose host matches
+/// that pattern. Records without a URL never match a scoped rule; an unscoped
+/// rule runs for every record.
 pub fn apply_rules(record: &mut Record, rules: &[Rule]) -> Vec<Action> {
+    let host = record.url.as_deref().and_then(host_of).map(normalize_host);
     let mut fired = Vec::new();
     for rule in rules {
+        if !scope_matches(rule, host.as_deref()) {
+            continue;
+        }
         if eval_condition(&rule.when, record) {
             for a in &rule.then {
                 apply_action(record, a);
@@ -72,6 +90,49 @@ pub fn apply_rules(record: &mut Record, rules: &[Rule]) -> Vec<Action> {
         }
     }
     fired
+}
+
+fn scope_matches(rule: &Rule, host: Option<&str>) -> bool {
+    match rule.scope.as_deref().map(str::trim) {
+        None | Some("") | Some("*") => true,
+        Some(pattern) => host
+            .map(|h| {
+                host_matches(h, pattern)
+                    || glob_matches(&normalize_host(h), &normalize_host(pattern))
+            })
+            .unwrap_or(false),
+    }
+}
+
+/// Case-insensitive glob used by `matches`: `*` is any run of characters and
+/// `?` is one character. Iterative and linear-ish, so a hostile pattern cannot
+/// blow up the parser.
+pub fn glob_matches(text: &str, pattern: &str) -> bool {
+    let text: Vec<char> = text.to_lowercase().chars().collect();
+    let pattern: Vec<char> = pattern.to_lowercase().chars().collect();
+    let (mut t, mut p) = (0usize, 0usize);
+    let mut star: Option<usize> = None;
+    let mut star_t = 0usize;
+    while t < text.len() {
+        if p < pattern.len() && (pattern[p] == '?' || pattern[p] == text[t]) {
+            t += 1;
+            p += 1;
+        } else if p < pattern.len() && pattern[p] == '*' {
+            star = Some(p);
+            star_t = t;
+            p += 1;
+        } else if let Some(s) = star {
+            p = s + 1;
+            star_t += 1;
+            t = star_t;
+        } else {
+            return false;
+        }
+    }
+    while p < pattern.len() && pattern[p] == '*' {
+        p += 1;
+    }
+    p == pattern.len()
 }
 
 fn apply_action(record: &mut Record, a: &Action) {
@@ -98,36 +159,52 @@ fn apply_action(record: &mut Record, a: &Action) {
     }
 }
 
+fn value_string(val: &Value) -> String {
+    match val {
+        Value::Str(s) => s.clone(),
+        Value::Num(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+    }
+}
+
+/// Split a comma-separated rule value into list items. Used for typed list
+/// fields so `set tags = "rust, cli"` cannot write a scalar where the record
+/// format expects a sequence.
+fn value_list(val: &Value) -> Vec<String> {
+    value_string(val)
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn value_option(val: &Value) -> Option<String> {
+    let s = value_string(val);
+    let s = s.trim();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
+}
+
 fn set_field(record: &mut Record, field: &str, val: Value) {
     match field {
-        "title" => {
-            record.title = Some(match val {
-                Value::Str(s) => s,
-                Value::Num(n) => n.to_string(),
-                Value::Bool(b) => b.to_string(),
-            })
-        }
-        "status" => {
-            record.status = Some(match val {
-                Value::Str(s) => s,
-                Value::Num(n) => n.to_string(),
-                Value::Bool(b) => b.to_string(),
-            })
-        }
-        "url" => {
-            record.url = Some(match val {
-                Value::Str(s) => s,
-                Value::Num(n) => n.to_string(),
-                Value::Bool(b) => b.to_string(),
-            })
-        }
-        "description" => {
-            record.description = Some(match val {
-                Value::Str(s) => s,
-                Value::Num(n) => n.to_string(),
-                Value::Bool(b) => b.to_string(),
-            })
-        }
+        "title" => record.title = value_option(&val),
+        "status" => record.status = value_option(&val),
+        "url" => record.url = value_option(&val),
+        "description" => record.description = value_option(&val),
+        "icon" => record.icon = value_option(&val),
+        "color" => record.color = value_option(&val),
+        "parent" => record.parent = value_option(&val),
+        "target_type" => record.target_type = value_option(&val),
+        // `folder` is the placement field, not an extra key. `move` is the
+        // idiomatic action, but accepting `set folder` keeps the two consistent.
+        "folder" => record.folder = value_option(&val),
+        "tags" => record.tags = value_list(&val),
+        "categories" => record.categories = value_list(&val),
+        "related" => record.related = value_list(&val),
+        "links" => record.links = value_list(&val),
         other => {
             let yv = match val {
                 Value::Str(s) => serde_yaml::Value::String(s),
@@ -147,6 +224,24 @@ fn get_field(record: &Record, field: &str) -> Option<Value> {
         "description" => record.description.clone().map(Value::Str),
         "type" => Some(Value::Str(record.r#type.clone())),
         "id" => Some(Value::Str(record.id.clone())),
+        "target_type" => record.target_type.clone().map(Value::Str),
+        "icon" => record.icon.clone().map(Value::Str),
+        "color" => record.color.clone().map(Value::Str),
+        "parent" => record.parent.clone().map(Value::Str),
+        "categories" => Some(Value::Str(record.categories.join(", "))),
+        "related" => Some(Value::Str(record.related.join(", "))),
+        "links" => Some(Value::Str(record.links.join(", "))),
+        "created" => record.created.clone().map(Value::Str),
+        "modified" => record.modified.clone().map(Value::Str),
+        "folder" => Some(Value::Str(record.folder.clone().unwrap_or_default())),
+        "tags" => Some(Value::Str(record.tags.join(", "))),
+        // Hosts are derived, never stored: the URL stays the only source of
+        // truth, and a moved page cannot keep a stale domain field.
+        "host" | "domain" | "site" => record
+            .url
+            .as_deref()
+            .and_then(host_of)
+            .map(|h| Value::Str(normalize_host(h))),
         other => record.extra.get(other).map(yaml_to_value),
     }
 }
@@ -170,11 +265,20 @@ fn eval_condition(c: &Condition, record: &Record) -> bool {
         Condition::Ne(f, v) => !eval_condition(&Condition::Eq(f.clone(), v.clone()), record),
         Condition::Contains(f, needle) => get_field(record, f)
             .map(|gv| match gv {
-                Value::Str(s) => s.contains(needle),
+                // Text fields are prose, not identifiers: matching is
+                // case-insensitive so "Recipe" is found by `contains "recipe"`.
+                Value::Str(s) => s.to_lowercase().contains(&needle.to_lowercase()),
                 _ => false,
             })
             .unwrap_or(false),
         Condition::HasTag(t) => record.tags.iter().any(|x| x == t),
+        Condition::Matches(f, pattern) => get_field(record, f)
+            .map(|gv| match gv {
+                Value::Str(s) => glob_matches(&s, pattern),
+                Value::Num(n) => glob_matches(&n.to_string(), pattern),
+                Value::Bool(b) => glob_matches(&b.to_string(), pattern),
+            })
+            .unwrap_or(false),
         Condition::And(a, b) => eval_condition(a, record) && eval_condition(b, record),
         Condition::Or(a, b) => eval_condition(a, record) || eval_condition(b, record),
         Condition::Not(x) => !eval_condition(x, record),
@@ -209,10 +313,12 @@ fn values_equal(a: &Value, b: &Value) -> bool {
 pub fn parse_rules(text: &str) -> Result<RuleSet, String> {
     let mut rules = Vec::new();
     let mut current_name: Option<String> = None;
+    let mut current_scope: Option<String> = None;
     let mut current_when: Option<String> = None;
     let mut current_thens: Vec<String> = Vec::new();
 
     let flush = |name: &Option<String>,
+                 scope: &Option<String>,
                  w: &Option<String>,
                  thens: &Vec<String>,
                  rules: &mut Vec<Rule>|
@@ -231,6 +337,7 @@ pub fn parse_rules(text: &str) -> Result<RuleSet, String> {
         }
         rules.push(Rule {
             name: name.clone(),
+            scope: scope.clone(),
             when: cond,
             then: actions,
         });
@@ -240,25 +347,53 @@ pub fn parse_rules(text: &str) -> Result<RuleSet, String> {
     for raw_line in text.lines() {
         let line = raw_line.trim();
         if line.is_empty() {
-            flush(&current_name, &current_when, &current_thens, &mut rules)?;
+            flush(
+                &current_name,
+                &current_scope,
+                &current_when,
+                &current_thens,
+                &mut rules,
+            )?;
             current_name = None;
+            current_scope = None;
             current_when = None;
             current_thens.clear();
             continue;
         }
         if let Some(rest) = line.strip_prefix("rule ") {
-            flush(&current_name, &current_when, &current_thens, &mut rules)?;
+            flush(
+                &current_name,
+                &current_scope,
+                &current_when,
+                &current_thens,
+                &mut rules,
+            )?;
             current_when = None;
+            current_scope = None;
             current_thens.clear();
             let rest = rest.trim();
-            let name = if let Some(stripped) = rest.strip_prefix('"') {
-                // parse quoted name
+            let (name, trailing) = if let Some(stripped) = rest.strip_prefix('"') {
+                // A quoted name; anything after the closing quote may be a
+                // `for "pattern"` clause or a colon.
                 let end = stripped.find('"').ok_or("unterminated rule name")?;
-                stripped[..end].to_string()
+                (
+                    stripped[..end].to_string(),
+                    stripped[end + 1..].trim().to_string(),
+                )
             } else {
-                rest.to_string()
+                (rest.to_string(), String::new())
             };
             current_name = Some(name);
+            let trailing = trailing.trim_start_matches(':').trim();
+            if let Some(pattern) = trailing.strip_prefix("for ") {
+                current_scope = Some(parse_scope_pattern(pattern)?);
+            } else if !trailing.is_empty() {
+                return Err(format!("unexpected text after rule name: {}", trailing));
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("for ") {
+            current_scope = Some(parse_scope_pattern(rest)?);
             continue;
         }
         if let Some(rest) = line.strip_prefix("when") {
@@ -273,8 +408,23 @@ pub fn parse_rules(text: &str) -> Result<RuleSet, String> {
         }
         return Err(format!("unexpected line: {}", line));
     }
-    flush(&current_name, &current_when, &current_thens, &mut rules)?;
+    flush(
+        &current_name,
+        &current_scope,
+        &current_when,
+        &current_thens,
+        &mut rules,
+    )?;
     Ok(RuleSet { rules })
+}
+
+/// Parse the pattern in `for "*.example.com"`; bare words are allowed too.
+fn parse_scope_pattern(raw: &str) -> Result<String, String> {
+    let raw = raw.trim().trim_end_matches(':').trim();
+    match parse_value(raw)? {
+        Value::Str(s) => Ok(s),
+        _ => Err("rule scope requires a host pattern string".into()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -465,12 +615,7 @@ impl<'a> Parser<'a> {
                     _ => return Err("expected value".into()),
                 };
                 match op {
-                    Token::Eq => {
-                        if let Token::Ident(kw) = Token::Ident("contains".into()) {
-                            let _ = kw;
-                        }
-                        Ok(Condition::Eq(field, val))
-                    }
+                    Token::Eq => Ok(Condition::Eq(field, val)),
                     Token::Ne => Ok(Condition::Ne(field, val)),
                     Token::Ident(kw) if kw == "contains" => {
                         // value must be string
@@ -478,7 +623,6 @@ impl<'a> Parser<'a> {
                             Value::Str(s) => s,
                             _ => return Err("contains requires string".into()),
                         };
-                        // re-read value? we already consumed. Use needle.
                         Ok(Condition::Contains(field, needle))
                     }
                     Token::Ident(kw) if kw == "has" => {
@@ -487,6 +631,13 @@ impl<'a> Parser<'a> {
                             _ => return Err("has requires string".into()),
                         };
                         Ok(Condition::Contains(field, needle))
+                    }
+                    Token::Ident(kw) if kw == "matches" || kw == "like" => {
+                        let pattern = match val {
+                            Value::Str(s) => s,
+                            _ => return Err("matches requires string".into()),
+                        };
+                        Ok(Condition::Matches(field, pattern))
                     }
                     _ => Err("expected operator".into()),
                 }
@@ -662,6 +813,114 @@ then set status = "In Progress"
         apply_rules(&mut r, &rs.rules);
         assert!(r.tags.contains(&"systems".to_string()));
         assert_eq!(r.status.as_deref(), Some("In Progress"));
+    }
+
+    #[test]
+    fn per_domain_scope_filters_by_url_host() {
+        let text = r#"
+rule "YouTube cleanup" for "*.youtube.com":
+when tag "video"
+then set status = "Video"
+then add tag "video-site"
+
+rule "GitHub only"
+when tag "code"
+then add tag "github-rule"
+"#;
+        let rs = parse_rules(text).unwrap();
+        assert_eq!(rs.rules.len(), 2);
+        assert_eq!(rs.rules[0].scope.as_deref(), Some("*.youtube.com"));
+
+        let mut youtube = rec();
+        youtube.tags.push("video".to_string());
+        youtube.url = Some("https://www.youtube.com/watch?v=1".to_string());
+        apply_rules(&mut youtube, &rs.rules);
+        assert_eq!(youtube.status.as_deref(), Some("Video"));
+        assert!(youtube.tags.contains(&"video-site".to_string()));
+
+        // A scoped rule does nothing on another site...
+        let mut github = rec();
+        github.tags.push("video".to_string());
+        github.url = Some("https://github.com/rust-lang".to_string());
+        apply_rules(&mut github, &rs.rules);
+        assert_eq!(github.status.as_deref(), Some("Reading"));
+        // ...and a scoped rule never applies to a record with no URL.
+        let mut local = rec();
+        local.tags.push("video".to_string());
+        apply_rules(&mut local, &rs.rules);
+        assert_eq!(local.status.as_deref(), Some("Reading"));
+    }
+
+    #[test]
+    fn standalone_for_line_sets_scope() {
+        let text = r#"
+for "example.com"
+when tag "read"
+then add tag "example"
+"#;
+        let rs = parse_rules(text).unwrap();
+        assert_eq!(rs.rules[0].scope.as_deref(), Some("example.com"));
+        let mut r = rec();
+        r.tags.push("read".to_string());
+        r.url = Some("https://example.com/a".to_string());
+        apply_rules(&mut r, &rs.rules);
+        assert!(r.tags.contains(&"example".to_string()));
+    }
+
+    #[test]
+    fn derived_fields_read_url_and_folder() {
+        let text = r#"
+when host matches "*.example.com" and folder == "Inbox"
+then add tag "inboxed"
+"#;
+        let rs = parse_rules(text).unwrap();
+        let mut r = rec();
+        r.url = Some("https://news.example.com/post".to_string());
+        r.folder = Some("Inbox".to_string());
+        apply_rules(&mut r, &rs.rules);
+        assert!(r.tags.contains(&"inboxed".to_string()));
+    }
+
+    #[test]
+    fn glob_matching_supports_star_and_question() {
+        assert!(glob_matches("YouTube.com", "*youtube*"));
+        assert!(glob_matches("a.example.com", "*.example.com"));
+        assert!(glob_matches("ab", "a?"));
+        assert!(!glob_matches("abc", "a?"));
+        assert!(glob_matches("", "*"));
+        assert!(!glob_matches("abc", "b*"));
+    }
+
+    #[test]
+    fn contains_is_case_insensitive() {
+        let text = r#"
+when title contains "recipe"
+then move "Cooking"
+"#;
+        let rs = parse_rules(text).unwrap();
+        let mut r = rec();
+        r.title = Some("Recipe soup".to_string());
+        apply_rules(&mut r, &rs.rules);
+        assert_eq!(r.folder.as_deref(), Some("Cooking"));
+    }
+
+    #[test]
+    fn set_typed_and_list_fields() {
+        let text = r#"
+when tag "rust"
+then set tags = "systems, cli"
+then set folder = "Archive"
+then set icon = "gear"
+"#;
+        let rs = parse_rules(text).unwrap();
+        let mut r = rec();
+        apply_rules(&mut r, &rs.rules);
+        assert_eq!(r.tags, vec!["systems".to_string(), "cli".to_string()]);
+        assert_eq!(r.folder.as_deref(), Some("Archive"));
+        assert_eq!(r.icon.as_deref(), Some("gear"));
+        // The list is a real list, not a scalar hidden in open metadata.
+        assert!(!r.extra.contains_key("tags"));
+        assert!(!r.extra.contains_key("folder"));
     }
 
     #[test]

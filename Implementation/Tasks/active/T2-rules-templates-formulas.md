@@ -14,9 +14,18 @@ related:
 Shipped:
 
 - Minimal rule engine: `when`/`then`, `and`/`or`/`not`,
-  `==`/`!=`/`contains`/`has`, `tag`,
-  `set`/`add tag`/`remove tag`/`move`/`delete`. Applied on save/edit via
-  "Apply rules" button, rules file at `~/.orchard/.lilac/rules.txt`.
+  `==`/`!=`/`contains`/`has`/`matches`/`like`, `tag`,
+  `set`/`add tag`/`remove tag`/`move`/`delete`. Rules file at
+  `~/.orchard/.lilac/rules.txt`.
+- Per-domain rules: `rule "name" for "*.example.com":` or a standalone
+  `for "*.example.com"` line. Scopes share the naming matcher (`www.` ignored,
+  `*.` includes subdomains) and never fire for records without a URL.
+- Derived read-only fields in conditions: `host`, `domain`, `site`, `folder`,
+  `tags`, `created`, `modified`.
+- Rule scheduling: `rules.auto_apply` in the Lilac config runs the file on every
+  browser save before the path is chosen. Off by default. Orchard's
+  **Settings → Rules** tab edits/validates the file, toggles automatic apply,
+  and `Apply rules` runs them on one open record.
 - Templates: a record with `type: template` and a required `target_type`.
   `create_from_template` copies the body and metadata into a new record of that
   type with fresh identity, timestamps and placement. `save_as_template` copies
@@ -34,7 +43,7 @@ Remaining:
 
 - Formula grammar refinement (Obsidian Bases-like:
   https://obsidian.md/help/formulas).
-- Per-domain rules and rule scheduling.
 - `.base` files supported as a type of Flower.
 - Template variables that read another record/property (today placeholders are
   values of the new record only).
+- Per-rule enable/disable and a dry-run preview showing which rules would fire.
