@@ -146,12 +146,16 @@ and `not`, and can use `tag`, `==`, `!=`, `contains`, `has`, `matches` and `like
 `contains`/`has` ignore case; `matches` supports `*` and `?` globs.
 Derived fields `host`, `domain`, `folder`, `tags`, `created` and `modified` are
 available without storing them. Actions are `set`, `add tag`, `remove tag`,
-`move` and `delete`.
+`move`, `delete` and `compute`. `compute field = expression` calculates a value,
+for example `compute score = 2 * 3 + 1` or
+`compute summary = title + " (" + status + ")"`; see
+[Formulas](docs/orchard-dev.md#formulas) for the expression language.
 
 Turn on **Apply automatically when the browser saves a page** to run the rules
 on each new record; a `move` action chooses the folder before the file is
 written. `Apply rules` in an open record runs them on demand. A file that does
-not parse is never saved, and a parse error never blocks a browser save.
+not parse is never saved, and a parse error or a failed calculation never blocks
+a browser save.
 
 ## Records
 

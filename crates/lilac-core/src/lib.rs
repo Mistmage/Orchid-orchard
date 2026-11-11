@@ -5,6 +5,7 @@ pub mod block_types;
 pub mod collection;
 pub mod editor;
 pub mod error;
+pub mod formula;
 pub mod naming;
 pub mod record;
 pub mod rules;
@@ -26,9 +27,15 @@ pub use block_types::{
 pub use collection::{CollectionItem, parse_collection_body, render_collection_body};
 pub use editor::BlockEditor;
 pub use error::Error;
+pub use formula::{
+    BinOp, Expr, UnOp, Value as FormulaValue, eval_formula, evaluate as evaluate_formula,
+    parse_formula,
+};
 pub use naming::{NamingConfig, NamingRule};
 pub use record::Record;
-pub use rules::{Action, Condition, Rule, RuleSet, Value, apply_rules, parse_rules};
+pub use rules::{
+    Action, Condition, Rule, RuleSet, Value, apply_rules, apply_rules_reported, parse_rules,
+};
 pub use session::{OpenReport, RecordSession, fingerprint};
 pub use storage::{
     Index, IndexEntry, delete_record, find_record_by_id, generate_record_id, host_of,

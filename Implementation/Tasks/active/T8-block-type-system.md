@@ -49,7 +49,7 @@ Shipped:
 - Settings is split into Orchid / Storage / Lilac / Block types tabs, with styled
   buttons and inputs.
 
-Verified: 95 core + 10 roundtrip + 5 probe + 4 config tests pass, clippy is
+Verified: 110 core + 10 roundtrip + 5 probe + 4 config tests pass, clippy is
 clean, frontend/Tauri/release builds succeed, and live CDP checks confirm block
 editing, insertion (section/leaf/append/code), deletion of leaves and subtrees,
 stale-delete refusal, undo/redo, the composer UI, WAL replay, and

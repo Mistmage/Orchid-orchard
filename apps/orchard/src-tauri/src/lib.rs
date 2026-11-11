@@ -1,8 +1,8 @@
 use lilac_core::session::{OpenReport, RecordSession};
 use lilac_core::{
-    Record, Wal, apply_rules as apply_rules_core, create_from_template, find_record_by_id,
-    list_templates, move_record_to_folder, normalize_folder, parse_rules, read_record, record_path,
-    rebuild_index, save_as_template, search_records, write_record,
+    Record, Wal, apply_rules_reported as apply_rules_core, create_from_template,
+    find_record_by_id, list_templates, move_record_to_folder, normalize_folder, parse_rules,
+    read_record, record_path, rebuild_index, save_as_template, search_records, write_record,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -537,12 +537,14 @@ fn apply_rules_cmd(state: tauri::State<Sessions>, id: String) -> Result<String, 
     let folder_before = record.folder.clone();
     let text = std::fs::read_to_string(lilac_host::config::rules_path()).unwrap_or_default();
     let ruleset = parse_rules(&text)?;
-    let fired = apply_rules_core(&mut record, &ruleset.rules);
+    let (fired, rule_errors) = apply_rules_core(&mut record, &ruleset.rules);
+    let fired: Vec<String> = fired.iter().map(|a| format!("{:?}", a)).collect();
     if fired.is_empty() {
         return Ok(serde_json::json!({
             "record": record,
             "path": path.to_string_lossy(),
             "fired": Vec::<String>::new(),
+            "errors": rule_errors,
             "moved": false,
         })
         .to_string());
@@ -571,11 +573,11 @@ fn apply_rules_cmd(state: tauri::State<Sessions>, id: String) -> Result<String, 
         write_record(&path, &record, body.as_deref()).map_err(|e| e.to_string())?;
     }
     sessions.remove(&id);
-    let fired: Vec<String> = fired.iter().map(|a| format!("{:?}", a)).collect();
     Ok(serde_json::json!({
         "record": record,
         "path": destination.to_string_lossy(),
         "fired": fired,
+        "errors": rule_errors,
         "moved": destination != path,
     })
     .to_string())

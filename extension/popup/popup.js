@@ -103,7 +103,14 @@ async function openEditor(id) {
       $("#e-tags").value = (nr.tags || []).join(", ");
       $("#e-status").value = nr.status || "";
       $("#e-body").value = resp.result.record.body || $("#e-body").value;
-      setStatus("Applied " + (resp.result.fired ? resp.result.fired.length : 0) + " rules");
+      setStatus(
+        "Applied " +
+          (resp.result.fired ? resp.result.fired.length : 0) +
+          " rules" +
+          (resp.result.errors && resp.result.errors.length
+            ? " · " + resp.result.errors.join("; ")
+            : ""),
+      );
     } else {
       setStatus("Error: " + (resp && resp.error));
     }

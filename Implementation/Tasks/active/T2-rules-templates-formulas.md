@@ -38,12 +38,20 @@ Shipped:
   `Save as template` inside an open record.
 - `generate_record_id` lives in core and is shared by the host and Orchard, so
   every new record gets an id that no file under `Records/` already uses.
+- Formula engine in `crates/lilac-core/src/formula.rs`: values, arithmetic,
+  comparisons, `and`/`or`/`not`, ternaries, lists, indexing, methods, and a
+  function set (`if`, `coalesce`, `min`/`max`/`sum`/`average`, string helpers,
+  `now`/`today`). Expressions parse once and evaluate against a record. Purity
+  is enforced by construction: no filesystem, network or arbitrary code.
+- `compute field = <expression>` rule action. Evaluation errors are reported via
+  `apply_rules_reported`, logged to the WAL by the host and shown in Orchard,
+  but never block a save. Metadata-only results no longer rename a file.
 
 Remaining:
 
-- Formula grammar refinement (Obsidian Bases-like:
-  https://obsidian.md/help/formulas).
-- `.base` files supported as a type of Flower.
+- `.base` files supported as a type of Flower, rendered from a validated
+  formula once and evaluated per row.
 - Template variables that read another record/property (today placeholders are
   values of the new record only).
+- Formula lookups across records (needs an index-aware evaluation context).
 - Per-rule enable/disable and a dry-run preview showing which rules would fire.

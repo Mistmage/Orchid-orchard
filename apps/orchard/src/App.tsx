@@ -234,6 +234,7 @@ interface AppliedRules {
   record: RecordMeta;
   path: string;
   fired: string[];
+  errors?: string[];
   moved: boolean;
 }
 
@@ -613,12 +614,16 @@ export default function App() {
   async function runRulesOn(id: string) {
     try {
       const result = await applyRules(id);
-      setBlockNotice(
+      const errors = result.errors ?? [];
+      let notice =
         result.fired.length === 0
           ? "No rules matched."
           : `Applied ${result.fired.length} action${result.fired.length === 1 ? "" : "s"}` +
-            (result.moved ? "; record moved" : ""),
-      );
+            (result.moved ? "; record moved" : "");
+      if (errors.length > 0) {
+        notice += ` · ${errors.length} error${errors.length === 1 ? "" : "s"}: ${errors.join("; ")}`;
+      }
+      setBlockNotice(notice);
       await load();
       await reloadBlocks(id);
     } catch (e) {
@@ -1215,8 +1220,15 @@ export default function App() {
                     Conditions combine with <code class="mono">and</code>,{" "}
                     <code class="mono">or</code> and <code class="mono">not</code>; actions
                     are <code class="mono">set</code>, <code class="mono">add tag</code>,{" "}
-                    <code class="mono">remove tag</code>, <code class="mono">move</code> and{" "}
-                    <code class="mono">delete</code>.
+                    <code class="mono">remove tag</code>, <code class="mono">move</code>,{" "}
+                    <code class="mono">delete</code> and <code class="mono">compute</code>.
+                  </div>
+                  <div class="hint">
+                    <code class="mono">compute field = expression</code> calculates a value
+                    from the record, for example{" "}
+                    <code class="mono">compute score = 2 * 3 + 1</code> or{" "}
+                    <code class="mono">compute summary = title + " (" + status + ")"</code>.
+                    A failed calculation is shown but never blocks the save.
                   </div>
                   <div class="hint">
                     Limit a rule to a site with <code class="mono">for "*.example.com"</code>.

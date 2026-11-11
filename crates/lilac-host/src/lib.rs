@@ -3,9 +3,9 @@ pub mod config;
 use base64::Engine;
 use config::{load_config, logs_dir, set_records_root};
 use lilac_core::{
-    NamingConfig, NamingRule, Record, Wal, apply_block_edit, apply_rules as apply_rules_core,
-    delete_record, generate_record_id, normalize_folder, parse_rules, read_record, rebuild_index,
-    record_path, search_records, write_record,
+    NamingConfig, NamingRule, Record, Wal, apply_block_edit,
+    apply_rules_reported as apply_rules_core, delete_record, generate_record_id, normalize_folder,
+    parse_rules, read_record, rebuild_index, record_path, search_records, write_record,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -159,7 +159,14 @@ fn dispatch(records_root: &std::path::Path, method: &str, params: Value) -> Resu
                 if !text.trim().is_empty() {
                     match parse_rules(&text) {
                         Ok(ruleset) => {
-                            apply_rules_core(&mut record, &ruleset.rules);
+                            let (_, errors) = apply_rules_core(&mut record, &ruleset.rules);
+                            if !errors.is_empty() {
+                                let mut wal = Wal::new(config::config_root().join("wal.log"));
+                                let _ = wal.append(
+                                    "rules_action_error",
+                                    serde_json::json!({ "record": record.id, "errors": errors }),
+                                );
+                            }
                         }
                         Err(e) => {
                             let mut wal = Wal::new(config::config_root().join("wal.log"));
@@ -340,12 +347,12 @@ fn dispatch(records_root: &std::path::Path, method: &str, params: Value) -> Resu
                 std::fs::read_to_string(config::rules_path()).unwrap_or_default()
             };
             let ruleset = parse_rules(&rules_text).map_err(|e| e.to_string())?;
-            let fired = apply_rules_core(&mut record, &ruleset.rules);
+            let (fired, errors) = apply_rules_core(&mut record, &ruleset.rules);
             let fired_json: Vec<Value> = fired
                 .iter()
                 .map(|a| json!({ "action": format!("{:?}", a) }))
                 .collect();
-            Ok(json!({ "record": record, "fired": fired_json }))
+            Ok(json!({ "record": record, "fired": fired_json, "errors": errors }))
         }
         "move_record" => {
             let id = params

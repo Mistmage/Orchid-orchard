@@ -203,11 +203,26 @@ and `?`. Besides stored frontmatter, conditions can read derived fields:
 of truth for a site.
 
 Actions are `set field = value`, `add tag "x"`, `remove tag "x"`,
-`move "folder"` and `delete` (which marks `_deleted: true` instead of removing a
-file during a rule pass). A `set` on a list field (`tags`, `categories`,
-`related`, `links`) splits the value on commas; `set folder` is equivalent to
-`move`. Rules run in file order; a later rule sees the changes made by an
-earlier one.
+`move "folder"`, `delete` (which marks `_deleted: true` instead of removing a
+file during a rule pass) and `compute field = <expression>`. A `set` on a list
+field (`tags`, `categories`, `related`, `links`) splits the value on commas;
+`set folder` is equivalent to `move`. Rules run in file order; a later rule sees
+the changes made by an earlier one.
+
+`compute` evaluates an expression against the record after earlier actions have
+run, so a second `compute` can read the field set by the first:
+
+```text
+when tag "book"
+then compute progress = if(status == "Finished", 100, 0)
+then compute reading_time = round(320 / 200, 1)
+```
+
+Formulas are described in the next section. A `compute` that fails at runtime
+(division by zero, a non-numeric string) is reported through
+`apply_rules_reported`; the remaining actions still run and a browser save is
+never blocked. The free `apply_rules` function keeps the older signature and
+discards those errors.
 
 There are two scheduling paths:
 
@@ -216,7 +231,7 @@ There are two scheduling paths:
   so a `move` action decides where the file lands. The switch is off by default
   and is edited in **Settings → Rules**. A rules file that fails to parse never
   blocks a save; the error is appended to the WAL and the record is stored
-  unchanged.
+  unchanged. Compute errors from a valid file are logged the same way.
 - **On demand.** `apply_rules_cmd({ id })` applies the file to one stored record
   from Orchard, writes the metadata, and moves the file when a `move` action
   fires. The open session is dropped so the next view reads the new path.
@@ -225,4 +240,43 @@ The GUI reads and writes the same file through `get_rules_cmd`, `set_rules_cmd`
 and `set_auto_apply_rules_cmd`. `set_rules_cmd` validates before writing, so a
 typo in the editor cannot disable the old rules. The extension popup's
 `Apply rules` sends its record to the host `apply_rules` command, which uses the
-saved file unless an explicit `rules` string is supplied.
+saved file unless an explicit `rules` string is supplied. Both the host response
+and `apply_rules_cmd` include an `errors` list for actions that ran but failed.
+
+## Formulas
+
+`lilac_core::formula` is a small expression language used by `compute` actions
+and, later, by `.base` views. It is parsed once (`parse_formula`) and evaluated
+against a record (`eval_formula`), so a rule load validates the syntax and a
+hundred records cost only evaluation.
+
+Values are null, booleans, numbers, strings and lists. Unknown fields evaluate to
+null rather than failing, which is what makes `coalesce(missing, "fallback")`
+and `if(done, "yes", "no")` useful on half-filled records.
+
+```text
+2 + 3 * 4                        14
+price * quantity                 numeric, coercion from numeric text
+title + " (" + status + ")"      string concatenation
+tags.length                      list length
+tags[0], tags[-1]                indexing, negative from the end
+done ? "yes" : "no"              ternary
+not status == "Archived"         `not` has low precedence
+if(true, 1, unknownFn())         1; the unused branch is never evaluated
+```
+
+Fields: every frontmatter key, plus derived `host` / `domain` / `site` (from
+`url`, `www.` ignored), `folder`, `created`, `modified`, `type`, `id`,
+`target_type` and list fields. `file.name`, `file.folder`, `file.path`,
+`file.ext` expose naming. Unknown metadata is read from `extra`.
+
+Functions: `if`, `coalesce` / `default`, `now`, `today`, `min`, `max`, `sum`,
+`average`, `abs`, `floor`, `ceil`, `round`, `sqrt`, `length`, `lower` / `upper`,
+`trim`, `string`, `number`, `boolean`, `list`, `contains`, `startsWith`,
+`endsWith`, `replace`, `join`, `pow`. Methods: `.toUpperCase()`,
+`.toLowerCase()`, `.trim()`, `.toFixed(n)`, `.includes()`, `.startsWith()`,
+`.endsWith()`, `.replace()`, `.split()`, `.join()`, `.slice()`, `.at()`,
+`.isEmpty()`, plus `.length` and `.first` / `.last` properties.
+
+Evaluation is pure apart from the clock in `now()` / `today()`. There is no
+filesystem or network access, so a shared `.base` file cannot execute anything.

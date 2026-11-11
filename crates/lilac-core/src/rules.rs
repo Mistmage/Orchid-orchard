@@ -18,10 +18,16 @@
 //!     - `remove tag "x"`
 //!     - `move "folder"`
 //!     - `delete`
+//!     - `compute field = <expression>` (see `crate::formula`)
+//!
+//! `compute` expressions are parsed once with the rules; a runtime failure such
+//! as division by zero is reported by `apply_rules_reported` and does not stop
+//! the remaining actions.
 //!
 //! Syntax is intentionally minimal and subject to change; the engine is the
 //! stable part.
 
+use crate::formula::{Expr, Value as FormulaValue, eval_formula};
 use crate::naming::{host_matches, normalize_host};
 use crate::record::Record;
 use crate::storage::host_of;
@@ -54,6 +60,8 @@ pub enum Action {
     RemoveTag(String),
     Move(String),
     Delete,
+    /// `compute field = <expression>`; the expression was parsed at load time.
+    Compute(String, Expr),
 }
 
 #[derive(Debug, Clone)]
@@ -75,21 +83,37 @@ pub struct RuleSet {
 /// A rule with a `scope` only runs when the record has a URL whose host matches
 /// that pattern. Records without a URL never match a scoped rule; an unscoped
 /// rule runs for every record.
+///
+/// Errors from `compute` actions are discarded here. Callers that can show them
+/// (the host log, the Orchard UI) use [`apply_rules_reported`].
 pub fn apply_rules(record: &mut Record, rules: &[Rule]) -> Vec<Action> {
+    apply_rules_reported(record, rules).0
+}
+
+/// Same as [`apply_rules`], but also returns human-readable errors for actions
+/// that could not be applied. A broken `compute` expression never stops the
+/// remaining actions or the save that triggered the rules.
+pub fn apply_rules_reported(record: &mut Record, rules: &[Rule]) -> (Vec<Action>, Vec<String>) {
     let host = record.url.as_deref().and_then(host_of).map(normalize_host);
     let mut fired = Vec::new();
+    let mut errors = Vec::new();
     for rule in rules {
         if !scope_matches(rule, host.as_deref()) {
             continue;
         }
         if eval_condition(&rule.when, record) {
             for a in &rule.then {
-                apply_action(record, a);
-                fired.push(a.clone());
+                match apply_action(record, a) {
+                    Ok(()) => fired.push(a.clone()),
+                    Err(e) => {
+                        let name = rule.name.as_deref().unwrap_or("<unnamed>");
+                        errors.push(format!("rule {:?}: {}", name, e));
+                    }
+                }
             }
         }
     }
-    fired
+    (fired, errors)
 }
 
 fn scope_matches(rule: &Rule, host: Option<&str>) -> bool {
@@ -135,7 +159,7 @@ pub fn glob_matches(text: &str, pattern: &str) -> bool {
     p == pattern.len()
 }
 
-fn apply_action(record: &mut Record, a: &Action) {
+fn apply_action(record: &mut Record, a: &Action) -> Result<(), String> {
     match a {
         Action::Set(field, val) => {
             set_field(record, field, val.clone());
@@ -156,6 +180,32 @@ fn apply_action(record: &mut Record, a: &Action) {
                 .extra
                 .insert("_deleted".to_string(), serde_yaml::Value::Bool(true));
         }
+        Action::Compute(field, expr) => {
+            let value = eval_formula(expr, record)
+                .map_err(|e| format!("compute {} failed: {}", field, e))?;
+            // A list becomes its comma-separated form so typed list fields are
+            // written through the same comma-splitting path as `set`.
+            set_field(record, field, formula_to_rule_value(value));
+        }
+    }
+    Ok(())
+}
+
+/// Adapt a formula value to the rule engine's value type. `null` maps to the
+/// empty string, which `set_field` treats as clearing an optional field.
+fn formula_to_rule_value(value: FormulaValue) -> Value {
+    match value {
+        FormulaValue::Null => Value::Str(String::new()),
+        FormulaValue::Bool(b) => Value::Bool(b),
+        FormulaValue::Num(n) => Value::Num(n),
+        FormulaValue::Str(s) => Value::Str(s),
+        FormulaValue::List(items) => Value::Str(
+            items
+                .iter()
+                .map(|v| v.display())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
     }
 }
 
@@ -658,6 +708,19 @@ fn parse_condition(s: &str) -> Result<Condition, String> {
 
 fn parse_action(s: &str) -> Result<Action, String> {
     let s = s.trim();
+    if let Some(rest) = s.strip_prefix("compute ") {
+        // `compute field = <expression>`. The expression grammar is separate
+        // (see `crate::formula`), so the split is only on the assignment `=`;
+        // comparisons inside the expression use `==` and are left intact.
+        let (field, rhs) = rest.split_once('=').ok_or("expected = in compute")?;
+        let field = field.trim();
+        if field.is_empty() {
+            return Err("compute needs a field name".into());
+        }
+        let expr = crate::formula::parse_formula(rhs.trim())
+            .map_err(|e| format!("compute {}: {}", field, e))?;
+        return Ok(Action::Compute(field.to_string(), expr));
+    }
     if let Some(rest) = s.strip_prefix("set ") {
         // field = value
         let (field, rhs) = rest.split_once('=').ok_or("expected = in set")?;
@@ -921,6 +984,67 @@ then set icon = "gear"
         // The list is a real list, not a scalar hidden in open metadata.
         assert!(!r.extra.contains_key("tags"));
         assert!(!r.extra.contains_key("folder"));
+    }
+
+    #[test]
+    fn compute_sets_text_number_and_list_fields() {
+        let text = r#"
+when tag "rust"
+then compute summary = title + " (" + status + ")"
+then compute score = 2 * 3 + 1
+then compute tags = "rust, computed"
+"#;
+        let rs = parse_rules(text).unwrap();
+        let mut r = rec();
+        let (fired, errors) = apply_rules_reported(&mut r, &rs.rules);
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        assert_eq!(fired.len(), 3);
+        assert_eq!(
+            r.extra.get("summary").and_then(|v| v.as_str()),
+            Some("cat video (Reading)")
+        );
+        assert_eq!(r.extra.get("score").and_then(|v| v.as_f64()), Some(7.0));
+        assert_eq!(r.tags, vec!["rust".to_string(), "computed".to_string()]);
+    }
+
+    #[test]
+    fn compute_can_clear_a_field_with_null() {
+        let text = r#"
+when status == "Reading"
+then compute status = null
+"#;
+        let rs = parse_rules(text).unwrap();
+        let mut r = rec();
+        apply_rules(&mut r, &rs.rules);
+        assert_eq!(r.status, None);
+    }
+
+    #[test]
+    fn invalid_compute_expression_is_a_parse_error() {
+        let text = r#"
+when true
+then compute x = 1 +
+"#;
+        let err = parse_rules(text).unwrap_err();
+        assert!(err.contains("compute"), "error: {err}");
+    }
+
+    #[test]
+    fn compute_runtime_error_is_reported_and_does_not_block_later_actions() {
+        let text = r#"
+when true
+then compute broken = 1 / 0
+then add tag "after"
+"#;
+        let rs = parse_rules(text).unwrap();
+        let mut r = rec();
+        let (fired, errors) = apply_rules_reported(&mut r, &rs.rules);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("division by zero"), "{:?}", errors);
+        assert!(r.tags.contains(&"after".to_string()));
+        // The failing action is not reported as fired.
+        assert_eq!(fired.len(), 1);
+        assert!(matches!(fired[0], Action::AddTag(_)));
     }
 
     #[test]
