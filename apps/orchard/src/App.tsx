@@ -9,6 +9,7 @@ interface Block {
   kind: any;
   content: string;
   span: [number, number];
+  meta?: Record<string, string | number | boolean | string[]>;
   children: Block[];
 }
 
@@ -376,6 +377,20 @@ function isSectionKind(kind: any): boolean {
   return !!(kind && (kind.Heading || kind.Divider));
 }
 
+/// Declared metadata values worth showing next to the block label. `level` and
+/// `rank` are already visible in the label, and `indent: 0` is noise.
+function metaSummary(b: Block): string {
+  if (typeof b.kind === "string") return "";
+  const entries = Object.entries(b.meta || {}).filter(([k, v]) => {
+    if (k === "level" || k === "rank") return false;
+    if (k === "indent" && Number(v) === 0) return false;
+    return true;
+  });
+  return entries
+    .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(", ") : String(v)}`)
+    .join(" · ");
+}
+
 function BlockNode(props: { b: Block; recordId: string; path: number[]; depth: number; indent: boolean; onSaved: (view: BlockSessionView) => void; onError: (message: string) => void; onInsertAfter: (path: number[]) => void; onDelete: (path: number[], content: string) => void }) {
   const section = isSectionKind(props.b.kind);
   return (
@@ -385,6 +400,9 @@ function BlockNode(props: { b: Block; recordId: string; path: number[]; depth: n
           <b>{kindLabel(props.b.kind)}</b>
           <span>rank {kindRank(props.b.kind)}</span>
           <Show when={props.depth > 0}><span>depth {props.depth}</span></Show>
+          <Show when={metaSummary(props.b)}>
+            <span class="hint mono" title="Metadata extracted from the declared block type">{metaSummary(props.b)}</span>
+          </Show>
           <span class="block-actions">
             <button class="mini" title="Insert a block after this one" onClick={(e) => { e.stopPropagation(); props.onInsertAfter(props.path); }}>+</button>
             <button class="mini danger" title="Delete this block" onClick={(e) => { e.stopPropagation(); props.onDelete(props.path, props.b.content || ""); }}>×</button>

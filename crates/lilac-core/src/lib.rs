@@ -25,8 +25,8 @@ pub use block::{
     reconcile_blocks, reconcile_text, splice_block, subtree_end, validate_tree,
 };
 pub use block_types::{
-    BLOCK_TYPES, BlockTypeDef, IdPolicy, MetaField, MetaKind, Nesting, Syntax, classify_line,
-    describe as describe_block_types, registry as block_type_registry,
+    BLOCK_TYPES, BlockTypeDef, IdPolicy, MetaField, MetaKind, MetaValue, Nesting, Syntax,
+    classify_line, describe as describe_block_types, registry as block_type_registry,
     validate_registry as validate_block_registry,
 };
 pub use collection::{CollectionItem, parse_collection_body, render_collection_body};

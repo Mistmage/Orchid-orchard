@@ -19,11 +19,11 @@
 //!
 //! Content hash is the universal fallback for dedup/change detection.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::block_types::{
-    self, BlockTypeDef, IdPolicy, MetaField, Nesting, RANK_DIVIDER, RANK_SUBDIVIDER, classify_line,
-    fence_marker, heading_level, list_marker, starts_new_block,
+    self, BlockTypeDef, IdPolicy, MetaField, MetaKind, MetaValue, Nesting, RANK_DIVIDER,
+    RANK_SUBDIVIDER, classify_line, fence_marker, heading_level, list_marker, starts_new_block,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -103,13 +103,44 @@ impl BlockKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+impl Block {
+    /// A declared metadata value, if the parser could extract it.
+    pub fn meta_value(&self, name: &str) -> Option<&MetaValue> {
+        self.meta.get(name)
+    }
+
+    /// Text form of a declared metadata value.
+    pub fn meta_text(&self, name: &str) -> Option<&str> {
+        match self.meta.get(name) {
+            Some(MetaValue::Text(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Declared fields that did not produce a value. Used by diagnostics; the
+    /// parser fills every required field it derives, so a non-empty list means
+    /// the file itself lacks required frontmatter.
+    pub fn missing_metadata(&self) -> Vec<&'static str> {
+        self.kind
+            .metadata_fields()
+            .iter()
+            .filter(|f| f.required && !self.meta.contains_key(f.name))
+            .map(|f| f.name)
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Block {
     pub id: Option<String>,
     pub kind: BlockKind,
     pub content: String,
     /// Byte span [start, end) in the original text.
     pub span: (usize, usize),
+    /// Values for this type's declared [`MetaField`]s, extracted by the parser.
+    /// Missing or mistyped fields are absent rather than coerced.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub meta: BTreeMap<String, MetaValue>,
     pub children: Vec<Block>,
 }
 
@@ -119,6 +150,7 @@ struct FlatBlock {
     kind: BlockKind,
     content: String,
     span: (usize, usize),
+    meta: BTreeMap<String, MetaValue>,
 }
 
 /// Parse grape markdown into a block tree.
@@ -387,13 +419,74 @@ fn parse_flat(text: &str) -> Vec<FlatBlock> {
             kind: BlockKind::Frontmatter,
             content: fm_content,
             span: (0, end),
+            meta: BTreeMap::new(),
         });
         rest_start = end;
     }
 
     out.extend(parse_flat_rest(&text[rest_start..], rest_start));
     assign_ids(&mut out);
+    for fb in &mut out {
+        fb.meta = extract_meta(&fb.kind, fb.id.as_deref(), &fb.content);
+    }
     out
+}
+
+/// Fill the values promised by a type's declared [`MetaField`]s.
+///
+/// Frontmatter is read from its YAML mapping; every other type derives its
+/// fields from the parsed shape. A value whose YAML type does not match the
+/// declaration is dropped instead of coerced, so a `Number` field can never
+/// silently become text.
+fn extract_meta(kind: &BlockKind, id: Option<&str>, content: &str) -> BTreeMap<String, MetaValue> {
+    let mut meta = BTreeMap::new();
+    if matches!(kind, BlockKind::Frontmatter) {
+        let Ok(serde_yaml::Value::Mapping(map)) =
+            serde_yaml::from_str::<serde_yaml::Value>(content)
+        else {
+            return meta;
+        };
+        for field in kind.metadata_fields() {
+            if let Some(value) = map.get(field.name).and_then(|v| yaml_meta(v, field.kind)) {
+                meta.insert(field.name.to_string(), value);
+            }
+        }
+        return meta;
+    }
+    for field in kind.metadata_fields() {
+        let value = match (field.name, kind) {
+            ("id", _) => id.map(|s| MetaValue::Text(s.to_string())),
+            ("level", BlockKind::Heading { level }) => Some(MetaValue::Number(*level as f64)),
+            ("rank", BlockKind::Divider { rank }) => Some(MetaValue::Number(*rank as f64)),
+            ("lang", BlockKind::CodeBlock { lang: Some(lang) }) => {
+                Some(MetaValue::Text(lang.clone()))
+            }
+            ("indent", BlockKind::ListItem { indent }) => Some(MetaValue::Number(*indent as f64)),
+            _ => None,
+        };
+        if let Some(value) = value {
+            meta.insert(field.name.to_string(), value);
+        }
+    }
+    meta
+}
+
+fn yaml_meta(value: &serde_yaml::Value, kind: MetaKind) -> Option<MetaValue> {
+    match kind {
+        MetaKind::Text | MetaKind::BlockRef => {
+            value.as_str().map(|s| MetaValue::Text(s.to_string()))
+        }
+        MetaKind::Number => value.as_f64().map(MetaValue::Number),
+        MetaKind::Bool => value.as_bool().map(MetaValue::Bool),
+        MetaKind::List => value.as_sequence().map(|items| {
+            MetaValue::List(
+                items
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect(),
+            )
+        }),
+    }
 }
 
 /// YAML frontmatter is `---` on line 1, a closing `---`, and a non-empty YAML
@@ -506,6 +599,7 @@ fn push_range(out: &mut Vec<FlatBlock>, lines: &[(usize, &str)], i: usize, j: us
         kind,
         content,
         span: (start, end),
+        meta: BTreeMap::new(),
     });
 }
 
@@ -603,6 +697,7 @@ fn build_tree(flat: Vec<FlatBlock>) -> Vec<Block> {
             kind: fb.kind,
             content: fb.content,
             span: fb.span,
+            meta: fb.meta,
             children: Vec::new(),
         };
 
@@ -1006,9 +1101,48 @@ mod tests {
             kind: BlockKind::Paragraph,
             content: "hello".into(),
             span: (0, 5),
+            meta: BTreeMap::new(),
             children: vec![],
         };
         assert_eq!(block_hash(&b), block_hash(&b));
+    }
+
+    #[test]
+    fn declared_metadata_is_extracted_for_each_type() {
+        let blocks = parse_blocks("# Hello\n\n```rust\nfn main() {}\n```\n\n- item\n");
+        let heading = &blocks[0];
+        assert_eq!(heading.meta_value("level"), Some(&MetaValue::Number(1.0)));
+        assert_eq!(heading.meta_text("id"), Some("hello"));
+        let code = &heading.children[0];
+        assert_eq!(code.meta_text("lang"), Some("rust"));
+        let list = &heading.children[1];
+        assert_eq!(list.meta_value("indent"), Some(&MetaValue::Number(0.0)));
+    }
+
+    #[test]
+    fn frontmatter_metadata_comes_from_yaml_and_respects_declared_types() {
+        let text =
+            "---\nid: rec_1\ntype: page\ntitle: Title\ntags:\n- rust\n- local\n---\n\nbody\n";
+        let blocks = parse_blocks(text);
+        let fm = &blocks[0];
+        assert_eq!(fm.meta_text("id"), Some("rec_1"));
+        assert_eq!(fm.meta_text("type"), Some("page"));
+        assert_eq!(fm.meta_text("title"), Some("Title"));
+        assert_eq!(
+            fm.meta_value("tags"),
+            Some(&MetaValue::List(vec![
+                "rust".to_string(),
+                "local".to_string()
+            ]))
+        );
+        assert!(fm.missing_metadata().is_empty());
+    }
+
+    #[test]
+    fn frontmatter_without_required_fields_reports_them_missing() {
+        let text = "---\ntitle: No identity\n---\n\nbody\n";
+        let blocks = parse_blocks(text);
+        assert_eq!(blocks[0].missing_metadata(), vec!["id", "type"]);
     }
 
     #[test]

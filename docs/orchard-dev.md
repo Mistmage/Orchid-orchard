@@ -68,6 +68,11 @@ contain `..` are ignored.
 - Block types are declared in `crates/lilac-core/src/block_types.rs`. The parser
   asks the registry for syntax and hierarchy; it has no per-type nesting
   branches. `validate_registry()` and `validate_tree()` enforce the invariants.
+  A type's declared `MetaField`s are extracted into `Block::meta` as typed
+  `MetaValue`s: frontmatter from its YAML, and `level`/`id`, `rank`, `lang` and
+  `indent` from the parsed shape. `missing_metadata()` reports required fields a
+  file does not provide, and the record view shows the extracted values next to
+  each block.
 - The frontend is SolidJS 2.0 RC + Vite (`apps/orchard/src/App.tsx`), a thin
   renderer that invokes Tauri commands and paints the returned block tree.
 - No document structure or parsing lives in JS.

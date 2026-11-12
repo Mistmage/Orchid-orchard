@@ -86,9 +86,24 @@ matched before a quote. `Custom` is reserved for future runtime-defined types.
 
 ### Metadata
 
-`MetaField { name, kind, required }` declares what a type may carry, for
-diagnostics and future tooling. It does not change parsing yet; unknown record
-frontmatter still round-trips untouched.
+`MetaField { name, kind, required }` declares what a type may carry. The parser
+extracts those values into `Block::meta` as a `MetaValue` chosen by the declared
+kind, so consumers read typed data instead of re-parsing content:
+
+| Type | Extracted fields |
+|---|---|
+| frontmatter | `id`, `type`, `title`, `tags`, `status`, `created`, `modified`, `folder`, `url` from the YAML mapping |
+| heading | `level`, `id` |
+| divider / subdivider | `rank` |
+| code | `lang` |
+| list | `indent` |
+
+A YAML value whose type does not match the declaration is dropped, not coerced:
+a `Number` field cannot silently become text. `Block::metadata_fields()` reads the
+declaration, `Block::meta_value()` / `meta_text()` read the extracted value and
+`Block::missing_metadata()` reports required fields the file does not provide.
+Unknown frontmatter still round-trips untouched; extraction is a read-only view
+over it.
 
 ## Invariants
 
@@ -133,6 +148,7 @@ type starts from data rather than from reading parser branches.
 - Syntax matchers are still line-based. A future pass can make them
   document-context aware (e.g. frontmatter only at offset 0, tables that span
   blank lines).
-- Metadata is declared but not yet extracted into `Block`. Wiring it in lets
-  views query typed block metadata instead of re-parsing content.
 - Runtime `Custom` types are reserved, not loaded from config yet.
+- `Block::meta` is derived on parse, not stored in the file. A block cannot yet
+  carry per-block metadata independent of its Markdown syntax; that needs a
+  sidecar or a declared syntax for it.

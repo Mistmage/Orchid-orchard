@@ -146,6 +146,59 @@ pub enum MetaKind {
     BlockRef,
 }
 
+impl MetaKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            MetaKind::Text => "text",
+            MetaKind::Number => "number",
+            MetaKind::Bool => "bool",
+            MetaKind::List => "list",
+            MetaKind::BlockRef => "block-ref",
+        }
+    }
+}
+
+/// A value extracted for a declared [`MetaField`].
+///
+/// The variant is chosen by the field's [`MetaKind`], not by the data: an
+/// instance cannot silently change a declared number into text. A value that
+/// does not match its declaration is simply absent, so `Block::meta` only ever
+/// contains values the type system promised.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MetaValue {
+    Text(String),
+    Number(f64),
+    Bool(bool),
+    List(Vec<String>),
+}
+
+impl MetaValue {
+    pub fn kind(&self) -> MetaKind {
+        match self {
+            MetaValue::Text(_) => MetaKind::Text,
+            MetaValue::Number(_) => MetaKind::Number,
+            MetaValue::Bool(_) => MetaKind::Bool,
+            MetaValue::List(_) => MetaKind::List,
+        }
+    }
+
+    pub fn display(&self) -> String {
+        match self {
+            MetaValue::Text(s) => s.clone(),
+            MetaValue::Number(n) => {
+                if n.fract() == 0.0 {
+                    format!("{}", *n as i64)
+                } else {
+                    n.to_string()
+                }
+            }
+            MetaValue::Bool(b) => b.to_string(),
+            MetaValue::List(items) => items.join(", "),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct MetaField {
     pub name: &'static str,
@@ -549,7 +602,7 @@ pub fn describe() -> serde_json::Value {
                 "id": t.id.label(),
                 "metadata": t.metadata.iter().map(|m| serde_json::json!({
                     "name": m.name,
-                    "kind": format!("{:?}", m.kind).to_lowercase(),
+                    "kind": m.kind.label(),
                     "required": m.required,
                 })).collect::<Vec<_>>(),
             })
