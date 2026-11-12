@@ -51,13 +51,15 @@ Shipped:
   parses/validates once and renders against the index; it reads other records but
   never writes them. Orchard renders the table, a warnings list and a definition
   editor; `New base` creates one. This is the first Flower.
+- Template references: `{{record:<id>.<expression>}}` reads another record with
+  the formula engine. `ReferenceCache` reads each id once per application; a
+  failed reference keeps the placeholder and is returned through
+  `create_from_template_reported` as a warning, so the record is still created.
 
 Remaining:
 
 - First-class `.base` files (the extension, not only a `type: base` record), so a
   YAML file dropped into a registered folder opens as a flower.
 - Multiple named views per base and explicit view types (table is the only one).
-- Template variables that read another record/property (today placeholders are
-  values of the new record only).
 - Formula lookups across records (needs an index-aware evaluation context).
 - Per-rule enable/disable and a dry-run preview showing which rules would fire.

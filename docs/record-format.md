@@ -91,7 +91,9 @@ Property names are implicitly records internally (`status:` ≡ `[[status]]:`). 
 
 A `template` record is a reusable mask: its body and metadata seed a new record
 of the declared `target_type`. Placeholders such as `{{title}}` and `{{host}}`
-are substituted when it is applied. See `docs/orchard-dev.md`.
+are substituted when it is applied. `{{record:<id>.<expression>}}` reads another
+record through the formula engine; an unresolved reference stays in the text and
+is reported as a warning. See `docs/orchard-dev.md`.
 
 ## Collection body
 

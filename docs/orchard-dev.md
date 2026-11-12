@@ -161,6 +161,22 @@ string metadata, including unknown fields. An unknown or unclosed placeholder is
 left as written. The UI exposes `New from template` (template, title, URL) and
 `Save as template` inside a record.
 
+### References to other records
+
+`{{record:<id>.<expression>}}` reads another record without modifying it. The
+first `.` splits the id from a formula, so `{{record:rec_book.title}}` copies a
+title and `{{record:rec_book.pages_total - record.pages_read}}` computes a value
+from that record. `file.name`, `file.folder` and every other formula field work.
+References are resolved lazily and cached per application, so the same record is
+read at most once.
+
+A reference that cannot be resolved (missing record, invalid formula, runtime
+error) is left in the text exactly as written and reported as a warning.
+`create_from_template_cmd` returns those in `warnings`; Orchard shows them next
+to the notice. The new record is always created: one broken reference must not
+make a template unusable. `create_from_template_reported` is the function behind
+the command; the older `create_from_template` discards warnings.
+
 ## Naming
 
 `lilac_core::naming` is the single naming engine. `NamingConfig` holds ordered

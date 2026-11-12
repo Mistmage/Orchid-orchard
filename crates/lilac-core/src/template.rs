@@ -17,6 +17,13 @@
 //! | `{{slug}}` | filename slug of title/URL |
 //! | `{{date}}` | local date, `YYYY-MM-DD` |
 //! | `{{now}}` | UTC timestamp, RFC 3339 |
+//! | `{{record:<id>.<expression>}}` | a formula evaluated against another record |
+//!
+//! A reference reads another record by id and evaluates a formula against it:
+//! `{{record:rec_books.pages_total - record.pages_read}}` or the simpler
+//! `{{record:rec_author.file.name}}`. The referenced record is never modified.
+//! An unknown record or a failed expression leaves the placeholder as written
+//! and is reported as a warning by `create_from_template_reported`.
 //!
 //! Unknown placeholders stay untouched. Substitution applies to the body and to
 //! string values in the copied metadata (including unknown fields); identity,
@@ -26,6 +33,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::Error;
+use crate::formula::{eval_formula, parse_formula};
 use crate::record::Record;
 use crate::storage::{
     find_record_by_id, generate_record_id, host_of, read_record, record_path, slugify_title,
@@ -139,6 +147,131 @@ pub fn substitute(text: &str, vars: &BTreeMap<String, String>) -> String {
     out
 }
 
+/// Lazy id → record cache for `{{record:...}}` references.
+///
+/// A template may mention the same record many times; each file is read at most
+/// once per application. A missing record is cached as `None` so a bad id is
+/// only searched for once.
+pub struct ReferenceCache<'a> {
+    root: &'a Path,
+    records: BTreeMap<String, Option<Record>>,
+}
+
+impl<'a> ReferenceCache<'a> {
+    pub fn new(records_root: &'a Path) -> Self {
+        Self {
+            root: records_root,
+            records: BTreeMap::new(),
+        }
+    }
+
+    fn get(&mut self, id: &str) -> Option<&Record> {
+        if !self.records.contains_key(id) {
+            let found = find_record_by_id(self.root, id)
+                .and_then(|path| read_record(&path).ok())
+                .map(|(record, _body)| record);
+            self.records.insert(id.to_string(), found);
+        }
+        self.records.get(id).and_then(|entry| entry.as_ref())
+    }
+}
+
+/// Resolve one `{{record:<id>.<expression>}}` body.
+///
+/// The first `.` separates the id from the formula, so `rec_a.file.name` reads
+/// the `file.name` property of `rec_a`. The referenced record is never modified.
+pub fn resolve_reference(
+    spec: &str,
+    cache: &mut ReferenceCache<'_>,
+    warnings: &mut Vec<String>,
+) -> Option<String> {
+    let (id, expression) = match spec.split_once('.') {
+        Some((id, expression)) => (id.trim(), expression.trim()),
+        None => {
+            warnings.push(format!(
+                "reference {:?}: expected {{record:<id>.<expression>}}",
+                spec
+            ));
+            return None;
+        }
+    };
+    if id.is_empty() || expression.is_empty() {
+        warnings.push(format!(
+            "reference {:?}: expected an id and an expression",
+            spec
+        ));
+        return None;
+    }
+    let record = match cache.get(id) {
+        Some(record) => record,
+        None => {
+            warnings.push(format!("reference {}: record not found", id));
+            return None;
+        }
+    };
+    let expr = match parse_formula(expression) {
+        Ok(expr) => expr,
+        Err(e) => {
+            warnings.push(format!("reference {}: {}", id, e));
+            return None;
+        }
+    };
+    match eval_formula(&expr, record) {
+        Ok(value) => Some(value.display()),
+        Err(e) => {
+            warnings.push(format!("reference {}: {}: {}", id, expression, e));
+            None
+        }
+    }
+}
+
+/// Replace placeholders, including references that read other records.
+///
+/// Ordinary names come from `vars`; a `record:` key is resolved through
+/// `cache`. An unresolved reference stays in the text exactly as written and
+/// adds one warning, so a template still produces a record.
+pub fn substitute_references(
+    text: &str,
+    vars: &BTreeMap<String, String>,
+    cache: &mut ReferenceCache<'_>,
+    warnings: &mut Vec<String>,
+) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        match after.find("}}") {
+            Some(end) => {
+                let key = after[..end].trim();
+                let replacement = match vars.get(key) {
+                    Some(value) => Some(value.clone()),
+                    None => match key.strip_prefix("record:") {
+                        Some(spec) => resolve_reference(spec.trim(), cache, warnings),
+                        None => None,
+                    },
+                };
+                match replacement {
+                    Some(value) => {
+                        out.push_str(&value);
+                        rest = &after[end + 2..];
+                    }
+                    None => {
+                        out.push_str("{{");
+                        rest = after;
+                    }
+                }
+            }
+            None => {
+                out.push_str("{{");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Create a new record from `template_id`. The template's body and metadata are
 /// copied, identity and timestamps are fresh, and the new record's type is the
 /// template's declared `target_type`.
@@ -148,6 +281,19 @@ pub fn create_from_template(
     title: Option<&str>,
     url: Option<&str>,
 ) -> Result<(Record, PathBuf), Error> {
+    create_from_template_reported(records_root, template_id, title, url)
+        .map(|(record, path, _warnings)| (record, path))
+}
+
+/// Same as [`create_from_template`], but returns warnings for `{{record:...}}`
+/// references that could not be resolved. The record is still created: one
+/// broken reference must not make a template unusable.
+pub fn create_from_template_reported(
+    records_root: &Path,
+    template_id: &str,
+    title: Option<&str>,
+    url: Option<&str>,
+) -> Result<(Record, PathBuf, Vec<String>), Error> {
     let path = find_record_by_id(records_root, template_id)
         .ok_or_else(|| Error::NotFound(template_id.to_string()))?;
     let (template, body) = read_record(&path)?;
@@ -184,6 +330,8 @@ pub fn create_from_template(
         .or_else(|| template.url.clone())
         .unwrap_or_default();
     let vars = placeholder_values(&new_id, &chosen_title, &chosen_url);
+    let mut cache = ReferenceCache::new(records_root);
+    let mut warnings = Vec::new();
 
     let mut record = template;
     record.id = new_id;
@@ -201,7 +349,7 @@ pub fn create_from_template(
     record.last_viewed = None;
     // Placement is a property of the instance, not the template.
     record.folder = None;
-    substitute_record(&mut record, &vars);
+    substitute_record(&mut record, &vars, &mut cache, &mut warnings);
     if record
         .title
         .as_deref()
@@ -212,10 +360,10 @@ pub fn create_from_template(
         record.title = None;
     }
 
-    let body = body.map(|b| substitute(&b, &vars));
+    let body = body.map(|b| substitute_references(&b, &vars, &mut cache, &mut warnings));
     let destination = record_path(records_root, &record);
     write_record(&destination, &record, body.as_deref())?;
-    Ok((record, destination))
+    Ok((record, destination, warnings))
 }
 
 /// Copy an existing record into a template for its own type. The source file is
@@ -264,7 +412,12 @@ pub fn save_as_template(
     Ok((record, destination))
 }
 
-fn substitute_record(record: &mut Record, vars: &BTreeMap<String, String>) {
+fn substitute_record(
+    record: &mut Record,
+    vars: &BTreeMap<String, String>,
+    cache: &mut ReferenceCache<'_>,
+    warnings: &mut Vec<String>,
+) {
     for value in [
         &mut record.title,
         &mut record.icon,
@@ -277,7 +430,7 @@ fn substitute_record(record: &mut Record, vars: &BTreeMap<String, String>) {
     .into_iter()
     .flatten()
     {
-        *value = substitute(value, vars);
+        *value = substitute_references(value, vars, cache, warnings);
     }
     for list in [
         &mut record.tags,
@@ -286,25 +439,32 @@ fn substitute_record(record: &mut Record, vars: &BTreeMap<String, String>) {
         &mut record.links,
     ] {
         for value in list.iter_mut() {
-            *value = substitute(value, vars);
+            *value = substitute_references(value, vars, cache, warnings);
         }
     }
     for value in record.extra.values_mut() {
-        substitute_value(value, vars);
+        substitute_value(value, vars, cache, warnings);
     }
 }
 
-fn substitute_value(value: &mut serde_yaml::Value, vars: &BTreeMap<String, String>) {
+fn substitute_value(
+    value: &mut serde_yaml::Value,
+    vars: &BTreeMap<String, String>,
+    cache: &mut ReferenceCache<'_>,
+    warnings: &mut Vec<String>,
+) {
     match value {
-        serde_yaml::Value::String(text) => *text = substitute(text, vars),
+        serde_yaml::Value::String(text) => {
+            *text = substitute_references(text, vars, cache, warnings)
+        }
         serde_yaml::Value::Sequence(items) => {
             for item in items {
-                substitute_value(item, vars);
+                substitute_value(item, vars, cache, warnings);
             }
         }
         serde_yaml::Value::Mapping(map) => {
             for value in map.values_mut() {
-                substitute_value(value, vars);
+                substitute_value(value, vars, cache, warnings);
             }
         }
         _ => {}
@@ -474,5 +634,110 @@ mod tests {
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].target_type, "note");
         assert_eq!(list[1].target_type, "page");
+    }
+
+    /// A book record used as the target of `{{record:...}}` in the tests.
+    fn seed_book(root: &Path) -> PathBuf {
+        let mut book = Record::new("rec_book", "book");
+        book.title = Some("Dune".into());
+        book.extra.insert(
+            "pages_total".to_string(),
+            serde_yaml::Value::Number(serde_yaml::Number::from(400)),
+        );
+        book.extra.insert(
+            "pages_read".to_string(),
+            serde_yaml::Value::Number(serde_yaml::Number::from(100)),
+        );
+        let path = record_path(root, &book);
+        write_record(&path, &book, Some("source text")).unwrap();
+        path
+    }
+
+    fn seed_referencing_template(root: &Path) {
+        let mut template = Record::new("rec_ref_tpl", TEMPLATE_TYPE);
+        template.title = Some("Reading note".into());
+        template.target_type = Some("note".into());
+        template.description = Some("About {{record:rec_book.title}}".into());
+        let body = "# {{title}}\n\nBook: {{record:rec_book.title}}\n\
+                    File: {{record:rec_book.file.name}}\n\
+                    Left: {{record:rec_book.pages_total - record.pages_read}}\n";
+        let path = record_path(root, &template);
+        write_record(&path, &template, Some(body)).unwrap();
+    }
+
+    #[test]
+    fn references_read_body_metadata_and_nested_properties() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let book_path = seed_book(root);
+        seed_referencing_template(root);
+
+        let (record, path, warnings) =
+            create_from_template_reported(root, "rec_ref_tpl", Some("Dune notes"), None).unwrap();
+        assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
+        assert_eq!(record.description.as_deref(), Some("About Dune"));
+        let (_saved, body) = read_record(&path).unwrap();
+        let body = body.unwrap();
+        assert!(body.contains("Book: Dune"), "body: {body}");
+        assert!(body.contains("File: Dune"), "body: {body}");
+        assert!(body.contains("Left: 300"), "body: {body}");
+        assert!(!body.contains("{{record:"), "body: {body}");
+
+        // Referenced records are only read, never written.
+        let (book, book_body) = read_record(&book_path).unwrap();
+        assert_eq!(book.title.as_deref(), Some("Dune"));
+        assert_eq!(book_body.as_deref(), Some("source text"));
+    }
+
+    #[test]
+    fn an_unknown_reference_is_preserved_and_reported() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let mut template = Record::new("rec_bad_ref", TEMPLATE_TYPE);
+        template.target_type = Some("note".into());
+        let path = record_path(root, &template);
+        write_record(
+            &path,
+            &template,
+            Some("Who: {{record:rec_missing.title}}\n"),
+        )
+        .unwrap();
+
+        let (record, path, warnings) =
+            create_from_template_reported(root, "rec_bad_ref", Some("X"), None).unwrap();
+        assert_eq!(record.title.as_deref(), Some("X"));
+        let (_saved, body) = read_record(&path).unwrap();
+        assert!(body.unwrap().contains("{{record:rec_missing.title}}"));
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("rec_missing"), "{:?}", warnings);
+    }
+
+    #[test]
+    fn a_broken_reference_expression_is_preserved_and_reported() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        seed_book(root);
+        let mut template = Record::new("rec_bad_expr", TEMPLATE_TYPE);
+        template.target_type = Some("note".into());
+        let path = record_path(root, &template);
+        write_record(
+            &path,
+            &template,
+            Some("Broken: {{record:rec_book.1 +}}\nNo dot: {{record:rec_book}}\n"),
+        )
+        .unwrap();
+
+        let (_record, path, warnings) =
+            create_from_template_reported(root, "rec_bad_expr", Some("X"), None).unwrap();
+        let (_saved, body) = read_record(&path).unwrap();
+        let body = body.unwrap();
+        assert!(body.contains("{{record:rec_book.1 +}}"), "body: {body}");
+        assert!(body.contains("{{record:rec_book}}"), "body: {body}");
+        assert_eq!(warnings.len(), 2, "{:?}", warnings);
+        assert!(
+            warnings.iter().any(|w| w.contains("expected")),
+            "{:?}",
+            warnings
+        );
     }
 }

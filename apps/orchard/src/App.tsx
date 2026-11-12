@@ -209,6 +209,7 @@ interface TemplateInfo {
 interface CreatedRecord {
   record: RecordMeta;
   path: string;
+  warnings?: string[];
 }
 
 async function fetchTemplates(): Promise<TemplateInfo[]> {
@@ -757,7 +758,14 @@ export default function App() {
         newTitle().trim() || null,
         newUrl().trim() || null,
       );
-      setNewNotice("Created " + (created.record.title || created.record.id));
+      const warnings = created.warnings ?? [];
+      setNewNotice(
+        "Created " +
+          (created.record.title || created.record.id) +
+          (warnings.length > 0
+            ? ` · ${warnings.length} reference warning${warnings.length === 1 ? "" : "s"}: ${warnings.join("; ")}`
+            : ""),
+      );
       setNewTitle("");
       setNewUrl("");
       await load();
@@ -1076,12 +1084,25 @@ export default function App() {
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); createRecord(); } }}
             />
             <button class="primary" onClick={createRecord} disabled={!selectedTemplate()?.target_type}>Create</button>
+            <span class="hint">
+              Placeholders: <code class="mono">{"{{title}}"}</code>,{" "}
+              <code class="mono">{"{{date}}"}</code>, and{" "}
+              <code class="mono">{"{{record:<id>.<expression>}}"}</code> to read another record.
+            </span>
             <Show when={newTemplate() && !selectedTemplate()?.target_type}>
               <span class="error">This template has no target_type; add one to its frontmatter.</span>
             </Show>
           </Show>
           <Show when={newNotice()}>
-            <span class={newNotice().startsWith("Created") ? "hint status-ok" : "error"}>{newNotice()}</span>
+            <span
+              class={
+                newNotice().startsWith("Created") && !newNotice().includes("reference warning")
+                  ? "hint status-ok"
+                  : "error"
+              }
+            >
+              {newNotice()}
+            </span>
           </Show>
           <button onClick={() => { setNewOpen(false); setNewNotice(""); }}>Close</button>
         </div>

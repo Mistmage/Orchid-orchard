@@ -276,8 +276,12 @@ fresh, so every record starts as its own file.
 
 Templates support `{{title}}`, `{{url}}`, `{{host}}`, `{{slug}}`, `{{id}}`,
 `{{date}}` and `{{now}}` in the body and in string metadata. Unknown
-placeholders are left as written. Templates are ordinary records under
-`Records/template/`: edit, tag, move or delete them like anything else.
+placeholders are left as written. `{{record:<id>.<expression>}}` reads another
+record through a formula, for example `{{record:rec_book.title}}` or
+`{{record:rec_book.pages_total - record.pages_read}}`; a reference that cannot
+be resolved stays as written and is reported as a warning. Templates are
+ordinary records under `Records/template/`: edit, tag, move or delete them like
+anything else.
 
 ## Principles
 

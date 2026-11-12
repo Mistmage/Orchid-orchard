@@ -1,7 +1,7 @@
 use lilac_core::session::{OpenReport, RecordSession};
 use lilac_core::{
     Record, Wal, BASE_TYPE, apply_rules_reported as apply_rules_core, base_starter_document,
-    create_from_template, find_record_by_id, generate_record_id, list_templates,
+    create_from_template_reported, find_record_by_id, generate_record_id, list_templates,
     move_record_to_folder, normalize_folder, parse_base, parse_rules, read_record, record_path,
     rebuild_index, render_base, save_as_template, search_records, write_record,
 };
@@ -449,16 +449,13 @@ fn create_from_template_cmd(
     url: Option<String>,
 ) -> Result<String, String> {
     let root = records_root();
-    let (record, path) = create_from_template(
-        &root,
-        &template_id,
-        title.as_deref(),
-        url.as_deref(),
-    )
-    .map_err(|e| e.to_string())?;
+    let (record, path, warnings) =
+        create_from_template_reported(&root, &template_id, title.as_deref(), url.as_deref())
+            .map_err(|e| e.to_string())?;
     Ok(serde_json::json!({
         "record": record,
         "path": path.to_string_lossy(),
+        "warnings": warnings,
     })
     .to_string())
 }

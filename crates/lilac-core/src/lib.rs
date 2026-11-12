@@ -49,7 +49,7 @@ pub use storage::{
     write_record_if_unchanged,
 };
 pub use template::{
-    TEMPLATE_TYPE, TemplateInfo, create_from_template, is_template, list_templates,
-    save_as_template, substitute as substitute_template,
+    TEMPLATE_TYPE, TemplateInfo, create_from_template, create_from_template_reported, is_template,
+    list_templates, save_as_template, substitute as substitute_template,
 };
 pub use wal::{Wal, WalEntry};
