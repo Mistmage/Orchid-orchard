@@ -71,6 +71,50 @@ pub struct Rule {
     pub scope: Option<String>,
     pub when: Condition,
     pub then: Vec<Action>,
+    /// `false` for a rule written as `disabled rule "name": ...`. A disabled
+    /// rule is parsed and listed but never applied.
+    pub enabled: bool,
+}
+
+impl Action {
+    /// The action in the same form the rules file uses, for previews and logs.
+    pub fn label(&self) -> String {
+        match self {
+            Action::Set(field, value) => format!("set {} = {}", field, value.label()),
+            Action::AddTag(tag) => format!("add tag {:?}", tag),
+            Action::RemoveTag(tag) => format!("remove tag {:?}", tag),
+            Action::Move(folder) => format!("move {:?}", folder),
+            Action::Delete => "delete".to_string(),
+            Action::Compute(field, _) => format!("compute {} = <expression>", field),
+        }
+    }
+}
+
+impl Value {
+    pub fn label(&self) -> String {
+        match self {
+            Value::Str(s) => format!("{:?}", s),
+            Value::Num(n) if n.fract() == 0.0 => format!("{}", *n as i64),
+            Value::Num(n) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+        }
+    }
+}
+
+/// One row of a dry run: what each rule would do to a record.
+#[derive(Debug, Clone)]
+pub struct RulePreview {
+    /// Position in the rules file, zero-based.
+    pub index: usize,
+    pub name: Option<String>,
+    pub scope: Option<String>,
+    pub enabled: bool,
+    /// Whether the condition matched (always false for a disabled rule).
+    pub matched: bool,
+    /// Actions that would run, in order.
+    pub actions: Vec<String>,
+    /// Actions that matched but failed at preview time.
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -98,6 +142,9 @@ pub fn apply_rules_reported(record: &mut Record, rules: &[Rule]) -> (Vec<Action>
     let mut fired = Vec::new();
     let mut errors = Vec::new();
     for rule in rules {
+        if !rule.enabled {
+            continue;
+        }
         if !scope_matches(rule, host.as_deref()) {
             continue;
         }
@@ -114,6 +161,40 @@ pub fn apply_rules_reported(record: &mut Record, rules: &[Rule]) -> (Vec<Action>
         }
     }
     (fired, errors)
+}
+
+/// Dry run: report what every rule would do to `record` without changing it.
+///
+/// Later rules see the changes earlier rules *would* make, so a rule that reads
+/// a computed field behaves exactly as it would on a real pass. The caller's
+/// record is cloned, never modified.
+pub fn preview_rules(record: &Record, rules: &[Rule]) -> Vec<RulePreview> {
+    let host = record.url.as_deref().and_then(host_of).map(normalize_host);
+    let mut work = record.clone();
+    let mut previews = Vec::with_capacity(rules.len());
+    for (index, rule) in rules.iter().enumerate() {
+        let mut preview = RulePreview {
+            index,
+            name: rule.name.clone(),
+            scope: rule.scope.clone(),
+            enabled: rule.enabled,
+            matched: false,
+            actions: Vec::new(),
+            errors: Vec::new(),
+        };
+        if rule.enabled && scope_matches(rule, host.as_deref()) && eval_condition(&rule.when, &work)
+        {
+            preview.matched = true;
+            for action in &rule.then {
+                match apply_action(&mut work, action) {
+                    Ok(()) => preview.actions.push(action.label()),
+                    Err(e) => preview.errors.push(format!("{}: {}", action.label(), e)),
+                }
+            }
+        }
+        previews.push(preview);
+    }
+    previews
 }
 
 fn scope_matches(rule: &Rule, host: Option<&str>) -> bool {
@@ -366,11 +447,13 @@ pub fn parse_rules(text: &str) -> Result<RuleSet, String> {
     let mut current_scope: Option<String> = None;
     let mut current_when: Option<String> = None;
     let mut current_thens: Vec<String> = Vec::new();
+    let mut current_enabled = true;
 
     let flush = |name: &Option<String>,
                  scope: &Option<String>,
                  w: &Option<String>,
                  thens: &Vec<String>,
+                 enabled: bool,
                  rules: &mut Vec<Rule>|
      -> Result<(), String> {
         if w.is_none() && thens.is_empty() {
@@ -390,6 +473,7 @@ pub fn parse_rules(text: &str) -> Result<RuleSet, String> {
             scope: scope.clone(),
             when: cond,
             then: actions,
+            enabled,
         });
         Ok(())
     };
@@ -402,25 +486,33 @@ pub fn parse_rules(text: &str) -> Result<RuleSet, String> {
                 &current_scope,
                 &current_when,
                 &current_thens,
+                current_enabled,
                 &mut rules,
             )?;
             current_name = None;
             current_scope = None;
             current_when = None;
             current_thens.clear();
+            current_enabled = true;
             continue;
         }
+        let (line, disabled) = match line.strip_prefix("disabled ") {
+            Some(rest) => (rest.trim_start(), true),
+            None => (line, false),
+        };
         if let Some(rest) = line.strip_prefix("rule ") {
             flush(
                 &current_name,
                 &current_scope,
                 &current_when,
                 &current_thens,
+                current_enabled,
                 &mut rules,
             )?;
             current_when = None;
             current_scope = None;
             current_thens.clear();
+            current_enabled = !disabled;
             let rest = rest.trim();
             let (name, trailing) = if let Some(stripped) = rest.strip_prefix('"') {
                 // A quoted name; anything after the closing quote may be a
@@ -441,6 +533,9 @@ pub fn parse_rules(text: &str) -> Result<RuleSet, String> {
                 return Err(format!("unexpected text after rule name: {}", trailing));
             }
             continue;
+        }
+        if disabled {
+            return Err("'disabled' must be followed by 'rule \"name\":'".into());
         }
         if let Some(rest) = line.strip_prefix("for ") {
             current_scope = Some(parse_scope_pattern(rest)?);
@@ -463,6 +558,7 @@ pub fn parse_rules(text: &str) -> Result<RuleSet, String> {
         &current_scope,
         &current_when,
         &current_thens,
+        current_enabled,
         &mut rules,
     )?;
     Ok(RuleSet { rules })
@@ -1045,6 +1141,85 @@ then add tag "after"
         // The failing action is not reported as fired.
         assert_eq!(fired.len(), 1);
         assert!(matches!(fired[0], Action::AddTag(_)));
+    }
+
+    #[test]
+    fn a_disabled_rule_is_parsed_but_never_applied() {
+        let text = r#"
+disabled rule "Off":
+when true
+then add tag "off"
+
+rule "On":
+when true
+then add tag "on"
+"#;
+        let rs = parse_rules(text).unwrap();
+        assert_eq!(rs.rules.len(), 2);
+        assert!(!rs.rules[0].enabled);
+        assert!(rs.rules[1].enabled);
+        let mut r = rec();
+        apply_rules(&mut r, &rs.rules);
+        assert_eq!(r.tags, vec!["rust".to_string(), "on".to_string()]);
+    }
+
+    #[test]
+    fn preview_reports_every_rule_without_mutating_the_record() {
+        let text = r#"
+disabled rule "Off":
+when true
+then add tag "off"
+
+rule "On":
+when tag "rust"
+then add tag "seen"
+then compute summary = title + "!"
+"#;
+        let rs = parse_rules(text).unwrap();
+        let r = rec();
+        let before = r.clone();
+        let preview = preview_rules(&r, &rs.rules);
+        assert_eq!(r, before, "preview must not change the record");
+        assert_eq!(preview.len(), 2);
+        assert!(!preview[0].enabled);
+        assert!(!preview[0].matched);
+        assert!(preview[0].actions.is_empty());
+        assert!(preview[1].matched);
+        assert_eq!(
+            preview[1].actions,
+            vec![
+                "add tag \"seen\"".to_string(),
+                "compute summary = <expression>".to_string()
+            ]
+        );
+        assert!(preview[1].errors.is_empty());
+    }
+
+    #[test]
+    fn preview_lets_later_rules_see_earlier_computed_values() {
+        let text = r#"
+when true
+then compute status = "Computed"
+
+when status == "Computed"
+then add tag "second"
+"#;
+        let rs = parse_rules(text).unwrap();
+        let r = rec();
+        let preview = preview_rules(&r, &rs.rules);
+        assert!(preview[0].matched);
+        assert!(preview[1].matched);
+        assert_eq!(preview[1].actions, vec!["add tag \"second\"".to_string()]);
+        assert_eq!(r.status.as_deref(), Some("Reading"));
+    }
+
+    #[test]
+    fn disabled_only_modifies_a_rule_header() {
+        assert!(
+            parse_rules("disabled when true\nthen add tag \"x\"\n")
+                .unwrap_err()
+                .contains("disabled")
+        );
     }
 
     #[test]

@@ -153,9 +153,11 @@ for example `compute score = 2 * 3 + 1` or
 
 Turn on **Apply automatically when the browser saves a page** to run the rules
 on each new record; a `move` action chooses the folder before the file is
-written. `Apply rules` in an open record runs them on demand. A file that does
-not parse is never saved, and a parse error or a failed calculation never blocks
-a browser save.
+written. `Apply rules` in an open record runs them on demand, and `Preview rules`
+shows what every rule would do without changing anything. Write
+`disabled rule "name":` instead of `rule "name":` to keep a rule in the file but
+stop it from applying. A file that does not parse is never saved, and a parse
+error or a failed calculation never blocks a browser save.
 
 ## Records
 

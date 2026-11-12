@@ -47,6 +47,16 @@
     .base-table tbody tr:hover { background: rgba(255, 255, 255, 0.04); }
     .base-warnings { margin: 6px 0; font-size: 12px; }
     .base-warnings ul { margin: 6px 0 0; padding-left: 18px; }
+    .rule-preview { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 8px; background: var(--panel); }
+    .rule-preview > .row { margin-bottom: 6px; }
+    .rule-preview-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+    .rule-preview-row { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; background: var(--bg); opacity: 0.85; }
+    .rule-preview-row.matched { border-color: var(--ok); opacity: 1; }
+    .rule-preview-row.disabled { opacity: 0.55; }
+    .rule-preview-row .idx { font-size: 11px; color: var(--muted); min-width: 22px; }
+    .rule-preview-actions { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
+    .rule-preview-actions li { color: var(--text); }
+    .rule-preview-errors { margin: 4px 0 0; padding-left: 18px; font-size: 12px; color: var(--err, #f38ba8); }
     .meta-editor { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--panel); }
     .meta-editor summary { cursor: pointer; font-size: 12px; color: var(--muted); user-select: none; }
     .meta-editor[open] summary { margin-bottom: 8px; }

@@ -36,8 +36,19 @@ interface RulesInfo {
   path: string;
   text: string;
   rules: number;
+  active?: number;
   error: string | null;
   auto_apply: boolean;
+}
+
+interface RulePreview {
+  index: number;
+  name: string | null;
+  scope: string | null;
+  enabled: boolean;
+  matched: boolean;
+  actions: string[];
+  errors: string[];
 }
 
 interface NamingRule {
@@ -256,6 +267,12 @@ interface BaseRender {
 async function applyRules(id: string): Promise<AppliedRules> {
   const json = (await invoke("apply_rules_cmd", { id })) as string;
   return JSON.parse(json) as AppliedRules;
+}
+
+async function previewRules(id: string): Promise<RulePreview[]> {
+  const json = (await invoke("preview_rules_cmd", { id })) as string;
+  const parsed = JSON.parse(json) as { rules: RulePreview[] };
+  return parsed.rules;
 }
 
 interface RecordMeta {
@@ -523,6 +540,9 @@ export default function App() {
   const [rulesDraft, setRulesDraft] = createSignal("");
   const [rulesMsg, setRulesMsg] = createSignal("");
   const [autoApplyRules, setAutoApplyRules] = createSignal(false);
+  const [rulePreviewId, setRulePreviewId] = createSignal<string | null>(null);
+  const [rulePreview, setRulePreview] = createSignal<RulePreview[]>([]);
+  const [rulePreviewNotice, setRulePreviewNotice] = createSignal("");
   const [newBaseOpen, setNewBaseOpen] = createSignal(false);
   const [newBaseTitle, setNewBaseTitle] = createSignal("");
   const [baseSource, setBaseSource] = createSignal("");
@@ -666,6 +686,22 @@ export default function App() {
       await reloadBlocks(id);
     } catch (e) {
       setBlockNotice("Apply rules failed: " + String(e));
+    }
+  }
+
+  async function previewRulesOn(id: string) {
+    try {
+      const rows = await previewRules(id);
+      const active = rows.filter((r) => r.enabled).length;
+      const matched = rows.filter((r) => r.matched).length;
+      setRulePreviewId(id);
+      setRulePreview(rows);
+      setRulePreviewNotice(
+        `${matched} of ${active} active rule${active === 1 ? "" : "s"} would fire.` +
+          (rows.length > active ? ` ${rows.length - active} disabled.` : ""),
+      );
+    } catch (e) {
+      setBlockNotice("Preview failed: " + String(e));
     }
   }
 
@@ -854,6 +890,9 @@ export default function App() {
     setComposerOpen(false);
     setMetaNotice("");
     setMetaOpen(false);
+    setRulePreviewId(null);
+    setRulePreview([]);
+    setRulePreviewNotice("");
     if (expanded() === id) { setExpanded(null); setBlocks([]); return; }
     setExpanded(id);
     const card = records().find((r) => r.id === id);
@@ -1364,6 +1403,13 @@ export default function App() {
                     <code class="mono">created</code>, <code class="mono">modified</code>.
                     Use <code class="mono">host matches "*.youtube.com"</code> for a glob.
                   </div>
+                  <div class="hint">
+                    Switch a rule off without deleting it with{" "}
+                    <code class="mono">disabled rule "name":</code>. A disabled rule is
+                    still parsed and listed, but never applied.{" "}
+                    <b>Preview rules</b> on a record or base dry-runs every rule without
+                    changing the file, so you can see what would fire first.
+                  </div>
                   <textarea
                     class="rules-editor"
                     rows={16}
@@ -1392,7 +1438,12 @@ export default function App() {
                   </Show>
                   <div class="hint mono">{rulesInfo()?.path || settings()?.rules_path || "…"}</div>
                   <div class="hint">
-                    {rulesInfo() ? `${rulesInfo()!.rules} parsed rule${rulesInfo()!.rules === 1 ? "" : "s"}` : "…"}
+                    {rulesInfo()
+                      ? `${rulesInfo()!.rules} parsed rule${rulesInfo()!.rules === 1 ? "" : "s"}` +
+                        (rulesInfo()!.active !== undefined && rulesInfo()!.active !== rulesInfo()!.rules
+                          ? ` (${rulesInfo()!.active} active, ${rulesInfo()!.rules - (rulesInfo()!.active ?? 0)} disabled)`
+                          : "")
+                      : "…"}
                     {" · "}a file that does not parse is never written.
                   </div>
                 </section>
@@ -1503,6 +1554,7 @@ then move "Cooking"`}</pre>
                         <button onClick={() => startMove(r.id, r.folder)} title="Move this base to another folder under Records/">Move…</button>
                         <button onClick={() => saveTemplate(r.id)} title="Copy this base into a template">Save as template</button>
                         <button onClick={() => runRulesOn(r.id)} title="Apply the rules in Settings → Rules to this base now">Apply rules</button>
+                        <button onClick={() => previewRulesOn(r.id)} title="Show what the rules would do to this base without changing anything">Preview rules</button>
                         <Show when={baseNotice()}>
                           <span class={baseNotice().startsWith("Saved") || baseNotice().startsWith("Base created") ? "hint status-ok" : "error"}>
                             {baseNotice()}
@@ -1575,6 +1627,7 @@ then move "Cooking"`}</pre>
                     <button onClick={(e) => { e.stopPropagation(); startMove(r.id, r.folder); }} title="Move this record to another folder under Records/">Move…</button>
                     <button onClick={(e) => { e.stopPropagation(); saveTemplate(r.id); }} title="Copy this record into a template for its type">Save as template</button>
                     <button onClick={(e) => { e.stopPropagation(); runRulesOn(r.id); }} title="Apply the rules in Settings → Rules to this record now">Apply rules</button>
+                    <button onClick={(e) => { e.stopPropagation(); previewRulesOn(r.id); }} title="Show what the rules would do to this record without changing anything">Preview rules</button>
                     <Show when={blockNotice()}>
                       <span class="error">{blockNotice()}</span>
                     </Show>
@@ -1648,6 +1701,43 @@ then move "Cooking"`}</pre>
                     )}
                   </For>
                 </div>
+                </Show>
+                <Show when={rulePreviewId() === r.id}>
+                  <div class="rule-preview" onClick={(e) => e.stopPropagation()}>
+                    <div class="row">
+                      <b>Rule preview</b>
+                      <span class="hint">{rulePreviewNotice()}</span>
+                      <button class="mini" title="Close the preview" onClick={() => { setRulePreviewId(null); setRulePreview([]); }}>×</button>
+                    </div>
+                    <Show when={rulePreview().length > 0} fallback={<div class="hint">No rules in Settings → Rules yet.</div>}>
+                      <ol class="rule-preview-list">
+                        <For each={rulePreview()}>
+                          {(p) => (
+                            <li class={"rule-preview-row " + (p.matched ? "matched" : "") + (p.enabled ? "" : " disabled")}>
+                              <div class="row">
+                                <span class="idx">#{p.index + 1}</span>
+                                <b>{p.name || "(unnamed rule)"}</b>
+                                <Show when={p.scope}><span class="hint">for {p.scope}</span></Show>
+                                <span class={p.enabled ? (p.matched ? "hint status-ok" : "hint") : "hint"}>
+                                  {p.enabled ? (p.matched ? "would fire" : "does not match") : "disabled"}
+                                </span>
+                              </div>
+                              <Show when={p.actions.length > 0}>
+                                <ul class="rule-preview-actions">
+                                  <For each={p.actions}>{(a) => <li class="mono">{a}</li>}</For>
+                                </ul>
+                              </Show>
+                              <Show when={p.errors.length > 0}>
+                                <ul class="rule-preview-errors">
+                                  <For each={p.errors}>{(err) => <li>{err}</li>}</For>
+                                </ul>
+                              </Show>
+                            </li>
+                          )}
+                        </For>
+                      </ol>
+                    </Show>
+                  </div>
                 </Show>
               </Show>
             </div>

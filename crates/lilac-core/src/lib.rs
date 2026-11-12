@@ -39,7 +39,8 @@ pub use formula::{
 pub use naming::{NamingConfig, NamingRule};
 pub use record::Record;
 pub use rules::{
-    Action, Condition, Rule, RuleSet, Value, apply_rules, apply_rules_reported, parse_rules,
+    Action, Condition, Rule, RulePreview, RuleSet, Value, apply_rules, apply_rules_reported,
+    parse_rules, preview_rules,
 };
 pub use session::{OpenReport, RecordSession, fingerprint};
 pub use storage::{

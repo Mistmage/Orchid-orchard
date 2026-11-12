@@ -69,7 +69,7 @@ case; equality stays exact, so `status == "Reading"` does not silently match
 
 ## Scheduling is explicit
 
-There are two entry points, and the difference is visible:
+There are two application entry points, and the difference is visible:
 
 - **Browser save.** `save_record` applies the rules when
   `rules.auto_apply` is true. It runs before `record_path`, so a `move` action
@@ -87,17 +87,48 @@ rules stay active. The two choices are different on purpose: a save is an
 external event that cannot be retried by the user, while editing rules is an
 interactive act that can be corrected immediately.
 
+## Turning a rule off without deleting it
+
+A user who is unsure about a rule should not have to choose between trusting it
+and losing the text. `disabled rule "name":` keeps the rule in the file, keeps it
+visible in the editor and keeps its scope and actions documented, but the engine
+skips it. `Rule.enabled` is parsed once; `apply_rules` and `preview_rules` both
+honour it. Removing the word `disabled` restores the rule exactly as written.
+
+`disabled` is only accepted before `rule`. A `disabled when ...` line is an error
+rather than a silently ignored rule, because a typo must not look like a working
+statement.
+
+## Dry run before a real pass
+
+`preview_rules` answers "what would happen?" without writing a byte. It returns
+one `RulePreview` per rule — position, name, scope, enabled, matched, the action
+labels that would run, and any runtime errors — and applies the actions to a
+clone of the record. Two consequences follow:
+
+- Later rules see what earlier rules would compute, so the preview is faithful
+  rather than a per-rule lookup table.
+- The caller's record, the file and the index are untouched; preview cannot move
+  or delete anything.
+
+Orchard exposes this as **Preview rules** under an expanded record or base.
+`apply_rules_cmd` and `preview_rules_cmd` share the same engine, so the preview
+cannot drift from the real pass; only the write step differs.
+
 ## Actions stay data-only
 
 `set`, `add tag`, `remove tag`, `move` and `delete` change frontmatter. `delete`
 sets `_deleted: true` instead of removing a file during a rule pass; actual
-deletion remains an explicit user action. Rules cannot run commands, fetch URLs
-or edit bodies. That keeps a rule file safe to copy between machines and keeps
-the failure model small.
+deletion remains an explicit user action. `compute field = expression` evaluates
+the pure formula engine and writes the result to a field. Rules cannot run
+commands, fetch URLs or edit bodies. That keeps a rule file safe to copy between
+machines and keeps the failure model small.
 
 ## Limits
 
 - Rules do not chain by dependency; they run in file order and each sees the
   previous rule's changes.
-- There is no per-rule enable switch yet; comment it out or delete it.
-- Formula expressions over numeric metadata are a later T2 step.
+- `disabled` is a file-level word, not a per-record condition; a rule that should
+  vary by site uses a scope instead.
+- A preview reports action labels and runtime errors, not a byte-level diff of
+  the record. The real pass computes the same values through the same engine.

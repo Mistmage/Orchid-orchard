@@ -215,6 +215,11 @@ matching as naming: `www.` is ignored, `example.com` is exact, and
 `*.example.com` includes the root and every subdomain. A scoped rule never runs
 for a record without a URL.
 
+Write `disabled rule "name":` instead of `rule "name":` to keep a rule in the
+file without applying it. A disabled rule is still parsed, counted and listed, so
+it stays documented and comes back with one word removed. `disabled` is only
+valid before `rule`; putting it on a `when` line is a parse error.
+
 Conditions support `and`, `or`, `not`, parentheses, `tag "x"`, `==`, `!=`,
 `contains`, `has`, `matches` and `like`. `contains` and `has` compare text
 without regard to case. `matches` and `like` are case-insensitive globs with `*`
@@ -256,13 +261,21 @@ There are two scheduling paths:
 - **On demand.** `apply_rules_cmd({ id })` applies the file to one stored record
   from Orchard, writes the metadata, and moves the file when a `move` action
   fires. The open session is dropped so the next view reads the new path.
+- **Dry run.** `preview_rules_cmd({ id })` returns one `RulePreview` per rule —
+  `index`, `name`, `scope`, `enabled`, `matched`, `actions` and `errors` — without
+  writing anything. It applies the rules to a clone of the record, so a later rule
+  sees the values earlier rules would compute, exactly as a real pass would. The
+  record and its file are unchanged. Orchard shows the result under the expanded
+  record or base from **Preview rules**.
 
 The GUI reads and writes the same file through `get_rules_cmd`, `set_rules_cmd`
-and `set_auto_apply_rules_cmd`. `set_rules_cmd` validates before writing, so a
-typo in the editor cannot disable the old rules. The extension popup's
-`Apply rules` sends its record to the host `apply_rules` command, which uses the
-saved file unless an explicit `rules` string is supplied. Both the host response
-and `apply_rules_cmd` include an `errors` list for actions that ran but failed.
+and `set_auto_apply_rules_cmd`. `get_rules_cmd` returns both `rules` (parsed) and
+`active` (enabled), so the editor can show how many are switched off.
+`set_rules_cmd` validates before writing, so a typo in the editor cannot disable
+the old rules. The extension popup's `Apply rules` sends its record to the host
+`apply_rules` command, which uses the saved file unless an explicit `rules` string
+is supplied. Both the host response and `apply_rules_cmd` include an `errors` list
+for actions that ran but failed.
 
 ## Formulas
 

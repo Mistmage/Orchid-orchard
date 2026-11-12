@@ -26,6 +26,12 @@ Shipped:
   browser save before the path is chosen. Off by default. Orchard's
   **Settings → Rules** tab edits/validates the file, toggles automatic apply,
   and `Apply rules` runs them on one open record.
+- Per-rule enable/disable: `disabled rule "name":` parses and lists a rule but
+  never applies it. `get_rules_cmd` reports both parsed and active counts.
+- Dry run: `preview_rules` / `preview_rules_cmd` return one `RulePreview` per
+  rule (index, name, scope, enabled, matched, actions, errors) against a clone of
+  the record, so later rules see earlier computed values. Orchard shows the
+  result from **Preview rules** on a record or base; nothing is written.
 - Templates: a record with `type: template` and a required `target_type`.
   `create_from_template` copies the body and metadata into a new record of that
   type with fresh identity, timestamps and placement. `save_as_template` copies
@@ -62,4 +68,3 @@ Remaining:
   YAML file dropped into a registered folder opens as a flower.
 - Multiple named views per base and explicit view types (table is the only one).
 - Formula lookups across records (needs an index-aware evaluation context).
-- Per-rule enable/disable and a dry-run preview showing which rules would fire.

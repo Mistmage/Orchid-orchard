@@ -2,8 +2,8 @@ use lilac_core::session::{OpenReport, RecordSession};
 use lilac_core::{
     Record, Wal, BASE_TYPE, apply_rules_reported as apply_rules_core, base_starter_document,
     create_from_template_reported, find_record_by_id, generate_record_id, list_templates,
-    move_record_to_folder, normalize_folder, parse_base, parse_rules, read_record, record_path,
-    rebuild_index, render_base, save_as_template, search_records, write_record,
+    move_record_to_folder, normalize_folder, parse_base, parse_rules, preview_rules, read_record,
+    record_path, rebuild_index, render_base, save_as_template, search_records, write_record,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -482,15 +482,20 @@ fn save_as_template_cmd(source_id: String, title: Option<String>) -> Result<Stri
 fn get_rules_cmd() -> serde_json::Value {
     let path = lilac_host::config::rules_path();
     let text = std::fs::read_to_string(&path).unwrap_or_default();
-    let (count, error) = match parse_rules(&text) {
-        Ok(set) => (set.rules.len(), serde_json::Value::Null),
-        Err(e) => (0, serde_json::json!(e)),
+    let (count, active, error) = match parse_rules(&text) {
+        Ok(set) => (
+            set.rules.len(),
+            set.rules.iter().filter(|r| r.enabled).count(),
+            serde_json::Value::Null,
+        ),
+        Err(e) => (0, 0, serde_json::json!(e)),
     };
     let auto_apply = lilac_host::config::load_config().0.rules.auto_apply;
     serde_json::json!({
         "path": path.to_string_lossy(),
         "text": text,
         "rules": count,
+        "active": active,
         "error": error,
         "auto_apply": auto_apply,
     })
@@ -536,7 +541,7 @@ fn apply_rules_cmd(state: tauri::State<Sessions>, id: String) -> Result<String, 
     let text = std::fs::read_to_string(lilac_host::config::rules_path()).unwrap_or_default();
     let ruleset = parse_rules(&text)?;
     let (fired, rule_errors) = apply_rules_core(&mut record, &ruleset.rules);
-    let fired: Vec<String> = fired.iter().map(|a| format!("{:?}", a)).collect();
+    let fired: Vec<String> = fired.iter().map(|a| a.label()).collect();
     if fired.is_empty() {
         return Ok(serde_json::json!({
             "record": record,
@@ -579,6 +584,30 @@ fn apply_rules_cmd(state: tauri::State<Sessions>, id: String) -> Result<String, 
         "moved": destination != path,
     })
     .to_string())
+}
+
+#[tauri::command]
+fn preview_rules_cmd(id: String) -> Result<String, String> {
+    let root = records_root();
+    let path = find_record_by_id(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
+    let (record, _body) = read_record(&path).map_err(|e| e.to_string())?;
+    let text = std::fs::read_to_string(lilac_host::config::rules_path()).unwrap_or_default();
+    let ruleset = parse_rules(&text)?;
+    let previews: Vec<serde_json::Value> = preview_rules(&record, &ruleset.rules)
+        .into_iter()
+        .map(|p| {
+            serde_json::json!({
+                "index": p.index,
+                "name": p.name,
+                "scope": p.scope,
+                "enabled": p.enabled,
+                "matched": p.matched,
+                "actions": p.actions,
+                "errors": p.errors,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({ "rules": previews }).to_string())
 }
 
 #[tauri::command]
@@ -713,6 +742,7 @@ pub fn run() {
             set_rules_cmd,
             set_auto_apply_rules_cmd,
             apply_rules_cmd,
+            preview_rules_cmd,
             render_base_cmd,
             save_base_source_cmd,
             create_base_cmd,
