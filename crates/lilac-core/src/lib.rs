@@ -16,8 +16,9 @@ pub mod template;
 pub mod wal;
 
 pub use base::{
-    BASE_TYPE, BaseColumn, BaseRow, BaseSource, BaseSpec, BaseView, parse_base, render_base,
-    starter_document as base_starter_document,
+    BASE_EXTENSION, BASE_TYPE, BaseColumn, BaseFileEntry, BaseRow, BaseSource, BaseSpec, BaseView,
+    create_base_file, parse_base, read_base_file, render_base, render_base_file, save_base_file,
+    scan_base_files, starter_document as base_starter_document,
 };
 pub use block::{
     Block, BlockKind, append_block, apply_block_edit, apply_block_edit_at_path, apply_block_edits,

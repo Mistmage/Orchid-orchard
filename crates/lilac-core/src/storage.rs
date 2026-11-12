@@ -71,6 +71,15 @@ pub fn write_record(path: &Path, record: &Record, body: Option<&str>) -> Result<
     atomic_write(path, out.as_bytes())
 }
 
+/// Write text atomically, creating parent directories. Used for non-record files
+/// such as `.base` flowers, which must never be left half-written.
+pub fn write_text(path: &Path, text: &str) -> Result<(), Error> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    atomic_write(path, text.as_bytes())
+}
+
 fn atomic_write(path: &Path, data: &[u8]) -> Result<(), Error> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
@@ -370,6 +379,17 @@ pub fn rebuild_index(records_root: &Path) -> Result<Index, Error> {
 }
 
 pub(crate) fn walk_md(dir: &Path, cb: &mut dyn FnMut(&Path)) -> Result<(), Error> {
+    walk_extension(dir, "md", cb)
+}
+
+/// Walk every file with `extension` under `dir`, recursively. Used by the index
+/// (`.md`) and by base files (`.base`), so both agree on what "inside Records"
+/// means, including hidden directories and Windows separators.
+pub(crate) fn walk_extension(
+    dir: &Path,
+    extension: &str,
+    cb: &mut dyn FnMut(&Path),
+) -> Result<(), Error> {
     if !dir.is_dir() {
         return Ok(());
     }
@@ -377,8 +397,8 @@ pub(crate) fn walk_md(dir: &Path, cb: &mut dyn FnMut(&Path)) -> Result<(), Error
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            walk_md(&path, cb)?;
-        } else if path.extension().and_then(|s| s.to_str()) == Some("md") {
+            walk_extension(&path, extension, cb)?;
+        } else if path.extension().and_then(|s| s.to_str()) == Some(extension) {
             cb(&path);
         }
     }

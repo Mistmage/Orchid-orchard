@@ -1,9 +1,12 @@
 //! Base records: a declarative query over other records.
 //!
 //! A base is the first *flower*: a terminal view with its own rendering
-//! authority. It is still an ordinary record (`type: base`), so it lives under
-//! `Records/`, is indexed, is backed up like everything else, and never needs a
-//! separate database table. Its body is the query document:
+//! authority. It has two file forms. A `type: base` record lives under
+//! `Records/`, is indexed, is backed up like everything else, and can carry
+//! record metadata. A standalone `.base` file is the same YAML query without
+//! frontmatter, so it can be dropped in from any editor. Both use the same
+//! parser and renderer; neither needs a separate database table. The body is
+//! the query document:
 //!
 //! ```yaml
 //! source:
@@ -32,12 +35,19 @@
 
 use crate::error::Error;
 use crate::formula::{Expr, Value as FormulaValue, eval_formula, parse_formula};
-use crate::storage::{read_record, rebuild_index};
+use crate::storage::{
+    generate_record_id, read_record, rebuild_index, slugify_title, walk_extension, write_text,
+};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const BASE_TYPE: &str = "base";
+
+/// Extension of a standalone base flower: a YAML query without record
+/// frontmatter. Both `file.base` and `type: base` records are supported so a
+/// user can choose between a view with record metadata and a plain query file.
+pub const BASE_EXTENSION: &str = "base";
 
 /// Which records a base looks at. All filters combine with AND; an absent
 /// filter matches everything.
@@ -376,11 +386,206 @@ pub fn starter_document(title: &str) -> String {
     )
 }
 
+// ---------------------------------------------------------------------------
+// File-backed bases (`.base`)
+// ---------------------------------------------------------------------------
+
+/// A standalone `.base` flower on disk. It has no record frontmatter; `id` and
+/// `title` are optional YAML keys at the top of the query document.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct BaseFileEntry {
+    pub id: String,
+    pub title: String,
+    /// Path relative to the records root, always with forward slashes, e.g.
+    /// `Records/base/books.base`.
+    pub path: String,
+    /// Why the query cannot be parsed, if it cannot. A broken file is still
+    /// listed so the user can find and fix it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Every `.base` file under `Records/`, sorted by title.
+///
+/// Scanning is independent of the record index: a base is a view, not a record,
+/// and must remain usable when the record index is empty or being rebuilt.
+pub fn scan_base_files(records_root: &Path) -> Result<Vec<BaseFileEntry>, Error> {
+    let mut files = Vec::new();
+    walk_extension(&records_root.join("Records"), BASE_EXTENSION, &mut |path| {
+        if let Ok(source) = std::fs::read_to_string(path) {
+            files.push(entry_from_source(
+                relative_flower_path(records_root, path),
+                &source,
+            ));
+        }
+    })?;
+    files.sort_by(|a, b| {
+        a.title
+            .to_lowercase()
+            .cmp(&b.title.to_lowercase())
+            .then(a.path.cmp(&b.path))
+    });
+    Ok(files)
+}
+
+/// Read the raw YAML of a `.base` file, for the definition editor.
+pub fn read_base_file(records_root: &Path, relative: &str) -> Result<String, Error> {
+    let path = resolve_base_file(records_root, relative)?;
+    std::fs::read_to_string(path).map_err(Error::from)
+}
+
+/// Validate and render a `.base` file without changing it.
+pub fn render_base_file(records_root: &Path, relative: &str) -> Result<BaseView, Error> {
+    let source = read_base_file(records_root, relative)?;
+    let spec = parse_base(&source).map_err(Error::Invalid)?;
+    render_base(records_root, &spec)
+}
+
+/// Validate and atomically save a `.base` file. An invalid query is never
+/// written; when `expected_source` is given, a file changed by another program
+/// is refused rather than overwritten.
+pub fn save_base_file(
+    records_root: &Path,
+    relative: &str,
+    text: &str,
+    expected_source: Option<&str>,
+) -> Result<BaseView, Error> {
+    let path = resolve_base_file(records_root, relative)?;
+    if let Some(expected) = expected_source {
+        let current = std::fs::read_to_string(&path)?;
+        if current != expected {
+            return Err(Error::Stale(relative.to_string()));
+        }
+    }
+    let spec = parse_base(text).map_err(Error::Invalid)?;
+    write_text(&path, text)?;
+    render_base(records_root, &spec)
+}
+
+/// Create a new `.base` file under `Records/base/` and return its entry.
+pub fn create_base_file(records_root: &Path, title: &str) -> Result<BaseFileEntry, Error> {
+    let title = title.trim();
+    let title = if title.is_empty() { "New base" } else { title };
+    for _ in 0..10 {
+        let id = generate_record_id(records_root);
+        let slug = slugify_title(Some(title), None);
+        let relative = format!("Records/{}/{slug}--{id}.{BASE_EXTENSION}", BASE_TYPE);
+        let path = records_root.join(&relative);
+        if path.exists() {
+            continue;
+        }
+        let source = starter_file_document(title, &id);
+        write_text(&path, &source)?;
+        return Ok(entry_from_source(relative, &source));
+    }
+    Err(Error::Invalid(
+        "could not allocate a unique base filename".into(),
+    ))
+}
+
+fn starter_file_document(title: &str, id: &str) -> String {
+    // JSON strings are valid YAML, which keeps a title with a quote or colon
+    // from producing a file that does not parse.
+    let title_yaml = serde_json::to_string(title).unwrap_or_else(|_| "\"New base\"".into());
+    let id_yaml = serde_json::to_string(id).unwrap_or_else(|_| "\"base\"".into());
+    format!(
+        "id: {id_yaml}\ntitle: {title_yaml}\n{}",
+        starter_document(title)
+    )
+}
+
+fn relative_flower_path(records_root: &Path, path: &Path) -> String {
+    path.strip_prefix(records_root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn entry_from_source(path: String, source: &str) -> BaseFileEntry {
+    let yaml = serde_yaml::from_str::<serde_yaml::Value>(source).ok();
+    let id = yaml
+        .as_ref()
+        .and_then(|doc| yaml_field(doc, "id"))
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("base:{path}"));
+    let title = yaml
+        .as_ref()
+        .and_then(|doc| yaml_field(doc, "title"))
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            Path::new(&path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("base")
+                .to_string()
+        });
+    BaseFileEntry {
+        id,
+        title,
+        path,
+        error: parse_base(source).err(),
+    }
+}
+
+fn yaml_field<'a>(doc: &'a serde_yaml::Value, key: &str) -> Option<&'a str> {
+    doc.as_mapping()?
+        .get(serde_yaml::Value::String(key.to_string()))?
+        .as_str()
+}
+
+/// Resolve a path received from the UI. Only `.base` files inside `Records/`
+/// are accepted, so a command can never read or overwrite an arbitrary file.
+fn resolve_base_file(records_root: &Path, relative: &str) -> Result<PathBuf, Error> {
+    let cleaned = relative.trim().replace('\\', "/");
+    if cleaned.is_empty() {
+        return Err(Error::Invalid("base path is empty".into()));
+    }
+    if cleaned.starts_with('/') {
+        return Err(Error::Invalid(format!(
+            "base path must be relative to the records root: {relative}"
+        )));
+    }
+    let mut segments = Vec::new();
+    for segment in cleaned.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return Err(Error::Invalid(format!(
+                "base path may not contain empty, . or .. segments: {relative}"
+            )));
+        }
+        if segment.contains(':') || segment.chars().any(char::is_control) {
+            return Err(Error::Invalid(format!(
+                "base path contains an invalid segment: {relative}"
+            )));
+        }
+        segments.push(segment);
+    }
+    if segments.first().copied() != Some("Records") {
+        return Err(Error::Invalid(format!(
+            "base path must start with Records/: {relative}"
+        )));
+    }
+    if !cleaned
+        .to_ascii_lowercase()
+        .ends_with(&format!(".{BASE_EXTENSION}"))
+    {
+        return Err(Error::Invalid(format!(
+            "base path must end with .{BASE_EXTENSION}: {relative}"
+        )));
+    }
+    let mut path = records_root.to_path_buf();
+    for segment in segments {
+        path.push(segment);
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::record::Record;
-    use crate::storage::{record_path, write_record};
+    use crate::storage::{record_path, write_record, write_text};
     use serde_yaml::Value as Yaml;
     use tempfile::TempDir;
 
@@ -550,6 +755,109 @@ mod tests {
     fn starter_document_parses() {
         let spec = parse_base(&starter_document("My base")).unwrap();
         assert!(!spec.columns.is_empty());
+    }
+
+    #[test]
+    fn scans_only_base_files_and_reads_optional_identity() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        seed(root, "rec_note", "note", "A note", &[]);
+        let base_dir = root.join("Records").join("base");
+        std::fs::create_dir_all(&base_dir).unwrap();
+        write_text(
+            &base_dir.join("books.base"),
+            "id: base_books\ntitle: Books\nsource:\n  type: book\n",
+        )
+        .unwrap();
+
+        let files = scan_base_files(root).unwrap();
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert_eq!(files[0].id, "base_books");
+        assert_eq!(files[0].title, "Books");
+        assert_eq!(files[0].path, "Records/base/books.base");
+        assert!(files[0].error.is_none());
+    }
+
+    #[test]
+    fn a_broken_base_file_is_listed_with_its_error() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let base_dir = root.join("Records").join("base");
+        std::fs::create_dir_all(&base_dir).unwrap();
+        write_text(&base_dir.join("broken.base"), "columns: [unclosed\n").unwrap();
+
+        let files = scan_base_files(root).unwrap();
+        assert_eq!(files.len(), 1);
+        // No id field: the path is the stable fallback identity.
+        assert_eq!(files[0].id, "base:Records/base/broken.base");
+        assert_eq!(files[0].title, "broken");
+        assert!(
+            files[0]
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("base YAML")
+        );
+    }
+
+    #[test]
+    fn file_backed_bases_render_and_refuse_a_stale_save() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        seed(root, "rec_book", "book", "Dune", &[]);
+        let base_dir = root.join("Records").join("base");
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let path = base_dir.join("books.base");
+        let source = "source:\n  type: book\ncolumns:\n  - file.name\n";
+        write_text(&path, source).unwrap();
+
+        let view = render_base_file(root, "Records/base/books.base").unwrap();
+        assert_eq!(view.rows.len(), 1);
+        assert_eq!(view.rows[0].cells[0], "Dune");
+
+        let stale = save_base_file(
+            root,
+            "Records/base/books.base",
+            "source:\n  type: note\n",
+            Some("something else"),
+        );
+        assert!(matches!(stale, Err(Error::Stale(_))));
+
+        save_base_file(root, "Records/base/books.base", source, Some(source)).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+    }
+
+    #[test]
+    fn base_file_paths_are_confined_to_records() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        for bad in [
+            "../evil.base",
+            "/absolute.base",
+            "notes/book.base",
+            "Records/../book.base",
+            "Records/book.md",
+        ] {
+            assert!(
+                read_base_file(root, bad).is_err(),
+                "accepted unsafe path: {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn create_base_file_writes_a_parseable_flower() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let entry = create_base_file(root, "Books").unwrap();
+        assert_eq!(entry.title, "Books");
+        assert!(!entry.id.is_empty());
+        assert!(entry.path.starts_with("Records/base/"));
+        assert!(entry.path.ends_with(".base"));
+        assert!(entry.error.is_none());
+        let source = read_base_file(root, &entry.path).unwrap();
+        assert!(source.contains("title: \"Books\""));
+        parse_base(&source).unwrap();
     }
 
     impl BaseSpec {

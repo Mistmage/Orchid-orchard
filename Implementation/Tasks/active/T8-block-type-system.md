@@ -53,7 +53,7 @@ Shipped:
   `validate`/`missing_metadata` report required fields the file lacks, and the
   record view shows the extracted values next to each block label.
 
-Verified: 129 core + 10 roundtrip + 5 probe + 4 config tests pass, clippy is
+Verified: 134 core + 10 roundtrip + 5 probe + 4 config tests pass, clippy is
 clean, frontend/Tauri/release builds succeed, and live CDP checks confirm block
 editing, insertion (section/leaf/append/code), deletion of leaves and subtrees,
 stale-delete refusal, undo/redo, the composer UI, WAL replay, and

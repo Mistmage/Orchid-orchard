@@ -57,6 +57,13 @@ Shipped:
   parses/validates once and renders against the index; it reads other records but
   never writes them. Orchard renders the table, a warnings list and a definition
   editor; `New base` creates one. This is the first Flower.
+- First-class `.base` files: the same YAML without record frontmatter, scanned
+  under `Records/` rather than indexed as records. `scan_base_files`,
+  `render_base_file`, `save_base_file` and `create_base_file` in core back
+  `list_base_files_cmd`, `render_base_file_cmd`, `save_base_file_cmd` and
+  `create_base_file_cmd`. A broken file is listed with its error; paths are
+  confined to `Records/` and must end in `.base`. Orchard has a **Base files**
+  section with the same table, definition editor and atomic save.
 - Template references: `{{record:<id>.<expression>}}` reads another record with
   the formula engine. `ReferenceCache` reads each id once per application; a
   failed reference keeps the placeholder and is returned through
@@ -64,7 +71,5 @@ Shipped:
 
 Remaining:
 
-- First-class `.base` files (the extension, not only a `type: base` record), so a
-  YAML file dropped into a registered folder opens as a flower.
 - Multiple named views per base and explicit view types (table is the only one).
 - Formula lookups across records (needs an index-aware evaluation context).

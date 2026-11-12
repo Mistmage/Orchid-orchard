@@ -264,6 +264,37 @@ interface BaseRender {
   view: BaseViewData;
 }
 
+interface BaseFileInfo {
+  id: string;
+  title: string;
+  path: string;
+  error?: string;
+}
+
+interface BaseFileRender extends BaseRender {
+  path: string;
+}
+
+async function fetchBaseFiles(): Promise<BaseFileInfo[]> {
+  const json = (await invoke("list_base_files_cmd")) as string;
+  return JSON.parse(json) as BaseFileInfo[];
+}
+
+async function renderBaseFile(path: string): Promise<BaseFileRender> {
+  const json = (await invoke("render_base_file_cmd", { path })) as string;
+  return JSON.parse(json) as BaseFileRender;
+}
+
+async function saveBaseFile(path: string, text: string, expectedSource: string): Promise<BaseFileRender> {
+  const json = (await invoke("save_base_file_cmd", { path, text, expectedSource })) as string;
+  return JSON.parse(json) as BaseFileRender;
+}
+
+async function createBaseFile(title: string): Promise<BaseFileInfo> {
+  const json = (await invoke("create_base_file_cmd", { title })) as string;
+  return JSON.parse(json) as BaseFileInfo;
+}
+
 async function applyRules(id: string): Promise<AppliedRules> {
   const json = (await invoke("apply_rules_cmd", { id })) as string;
   return JSON.parse(json) as AppliedRules;
@@ -408,6 +439,43 @@ function metaSummary(b: Block): string {
     .join(" · ");
 }
 
+function BaseTableView(props: { view: BaseViewData }) {
+  return (
+    <>
+      <div class="hint">
+        {props.view.rows.length} shown · {props.view.matched} matched · {props.view.scanned} scanned
+      </div>
+      <div class="base-table-wrap">
+        <table class="base-table">
+          <thead>
+            <tr><For each={props.view.labels}>{(label) => <th>{label}</th>}</For></tr>
+          </thead>
+          <tbody>
+            <For each={props.view.rows}>
+              {(row) => (
+                <tr title={row.path}>
+                  <For each={row.cells}>{(cell) => <td>{cell || "—"}</td>}</For>
+                </tr>
+              )}
+            </For>
+          </tbody>
+        </table>
+      </div>
+      <Show when={props.view.rows.length === 0}>
+        <div class="hint">No records matched this base yet.</div>
+      </Show>
+      <Show when={props.view.warnings.length > 0}>
+        <details class="base-warnings">
+          <summary>{props.view.warnings.length} warning{props.view.warnings.length === 1 ? "" : "s"}</summary>
+          <ul>
+            <For each={props.view.warnings}>{(w) => <li class="error mono">{w}</li>}</For>
+          </ul>
+        </details>
+      </Show>
+    </>
+  );
+}
+
 function BlockNode(props: { b: Block; recordId: string; path: number[]; depth: number; indent: boolean; onSaved: (view: BlockSessionView) => void; onError: (message: string) => void; onInsertAfter: (path: number[]) => void; onDelete: (path: number[], content: string) => void }) {
   const section = isSectionKind(props.b.kind);
   return (
@@ -549,6 +617,13 @@ export default function App() {
   const [baseLoadedSource, setBaseLoadedSource] = createSignal("");
   const [baseView, setBaseView] = createSignal<BaseViewData | null>(null);
   const [baseNotice, setBaseNotice] = createSignal("");
+  const [baseFiles, setBaseFiles] = createSignal<BaseFileInfo[]>([]);
+  const [expandedBaseFile, setExpandedBaseFile] = createSignal<string | null>(null);
+  const [fileBaseSource, setFileBaseSource] = createSignal("");
+  const [fileBaseLoadedSource, setFileBaseLoadedSource] = createSignal("");
+  const [fileBaseView, setFileBaseView] = createSignal<BaseViewData | null>(null);
+  const [fileBaseNotice, setFileBaseNotice] = createSignal("");
+  const [newBaseFileTitle, setNewBaseFileTitle] = createSignal("");
   const [previewTitle, setPreviewTitle] = createSignal("Example page - GitHub");
   const [previewUrl, setPreviewUrl] = createSignal("https://github.com/org/repo");
   const [previewResult, setPreviewResult] = createSignal("");
@@ -734,6 +809,15 @@ export default function App() {
     // Selection is a set of ids; drop ids that no longer exist after a search.
     const visible = new Set(res.map((r) => r.id));
     setSelected((prev) => new Set([...prev].filter((id) => visible.has(id))));
+    await loadBaseFiles();
+  }
+
+  async function loadBaseFiles() {
+    try {
+      setBaseFiles(await fetchBaseFiles());
+    } catch (e) {
+      setFileBaseNotice("Could not list base files: " + String(e));
+    }
   }
 
   function toggleSelected(id: string) {
@@ -885,6 +969,56 @@ export default function App() {
     }
   }
 
+  function openFileBase(path: string) {
+    setFileBaseNotice("");
+    setFileBaseView(null);
+    renderBaseFile(path)
+      .then((result) => {
+        setFileBaseSource(result.source);
+        setFileBaseLoadedSource(result.source);
+        setFileBaseView(result.view);
+      })
+      .catch((e) => setFileBaseNotice("Could not render base file: " + String(e)));
+  }
+
+  function toggleBaseFile(path: string) {
+    if (expandedBaseFile() === path) {
+      setExpandedBaseFile(null);
+      return;
+    }
+    setExpanded(null);
+    setBlocks([]);
+    setExpandedBaseFile(path);
+    openFileBase(path);
+  }
+
+  async function saveFileBase(path: string) {
+    try {
+      const result = await saveBaseFile(path, fileBaseSource(), fileBaseLoadedSource());
+      setFileBaseSource(result.source);
+      setFileBaseLoadedSource(result.source);
+      setFileBaseView(result.view);
+      setFileBaseNotice("Saved and rendered.");
+      await loadBaseFiles();
+    } catch (e) {
+      setFileBaseNotice("Save failed: " + String(e));
+    }
+  }
+
+  async function createFileBase() {
+    try {
+      const entry = await createBaseFile(newBaseFileTitle().trim() || "New base");
+      setNewBaseFileTitle("");
+      await loadBaseFiles();
+      setExpanded(null);
+      setExpandedBaseFile(entry.path);
+      openFileBase(entry.path);
+      setFileBaseNotice("Base file created. Edit the YAML below, then choose Save & render.");
+    } catch (e) {
+      setFileBaseNotice("Could not create base file: " + String(e));
+    }
+  }
+
   async function toggle(id: string) {
     setBlockNotice("");
     setComposerOpen(false);
@@ -893,6 +1027,7 @@ export default function App() {
     setRulePreviewId(null);
     setRulePreview([]);
     setRulePreviewNotice("");
+    setExpandedBaseFile(null);
     if (expanded() === id) { setExpanded(null); setBlocks([]); return; }
     setExpanded(id);
     const card = records().find((r) => r.id === id);
@@ -1562,40 +1697,7 @@ then move "Cooking"`}</pre>
                         </Show>
                       </div>
                       <Show when={baseView()} fallback={<div class="hint">Loading the base…</div>}>
-                        {(v) => (
-                          <>
-                            <div class="hint">
-                              {v().rows.length} shown · {v().matched} matched · {v().scanned} scanned
-                            </div>
-                            <div class="base-table-wrap">
-                              <table class="base-table">
-                                <thead>
-                                  <tr><For each={v().labels}>{(label) => <th>{label}</th>}</For></tr>
-                                </thead>
-                                <tbody>
-                                  <For each={v().rows}>
-                                    {(row) => (
-                                      <tr title={row.path}>
-                                        <For each={row.cells}>{(cell) => <td>{cell || "—"}</td>}</For>
-                                      </tr>
-                                    )}
-                                  </For>
-                                </tbody>
-                              </table>
-                            </div>
-                            <Show when={v().rows.length === 0}>
-                              <div class="hint">No records matched this base yet.</div>
-                            </Show>
-                            <Show when={v().warnings.length > 0}>
-                              <details class="base-warnings">
-                                <summary>{v().warnings.length} warning{v().warnings.length === 1 ? "" : "s"}</summary>
-                                <ul>
-                                  <For each={v().warnings}>{(w) => <li class="error mono">{w}</li>}</For>
-                                </ul>
-                              </details>
-                            </Show>
-                          </>
-                        )}
+                        {(v) => <BaseTableView view={v()} />}
                       </Show>
                       <details class="meta-editor" open>
                         <summary>Definition (YAML body)</summary>
@@ -1743,6 +1845,77 @@ then move "Cooking"`}</pre>
             </div>
           )}
         </For>
+      </div>
+      <div class="base-files">
+        <div class="row" style={{ "margin-top": "14px", "margin-bottom": "6px" }}>
+          <h3 style={{ margin: "0" }}>Base files</h3>
+          <input
+            placeholder="New .base title"
+            value={newBaseFileTitle()}
+            onInput={(e) => setNewBaseFileTitle(e.currentTarget.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") createFileBase(); }}
+          />
+          <button onClick={createFileBase}>New .base file</button>
+          <span class="hint">
+            A <code class="mono">.base</code> file is a YAML query with no record frontmatter.
+            Drop one under <code class="mono">Records/</code> and it appears here.
+          </span>
+        </div>
+        <Show when={fileBaseNotice()}>
+          <div class={fileBaseNotice().startsWith("Saved") || fileBaseNotice().includes("created") ? "hint status-ok" : "error"}>
+            {fileBaseNotice()}
+          </div>
+        </Show>
+        <Show when={baseFiles().length === 0}>
+          <div class="hint">No .base files yet. The query can be empty and will list every record.</div>
+        </Show>
+        <div style={{ display: "grid", gap: "8px", "margin-top": "8px" }}>
+          <For each={baseFiles()}>
+            {(b) => (
+              <div class="card" onClick={() => toggleBaseFile(b.path)} style={{ cursor: "pointer" }}>
+                <div class="card-head">
+                  <div class="title">{b.title}</div>
+                  <span class="folder-badge mono">{b.path}</span>
+                </div>
+                <div class="meta">{b.id}{b.error ? " · broken definition" : ""}</div>
+                <Show when={b.error}>
+                  <div class="error mono">{b.error}</div>
+                </Show>
+                <Show when={expandedBaseFile() === b.path}>
+                  <div class="blocks base-view" style={{ "margin-top": "8px", cursor: "default" }} onClick={(e) => e.stopPropagation()}>
+                    <div class="row" style={{ "margin-bottom": "6px" }}>
+                      <button onClick={() => openFileBase(b.path)} title="Re-run the query">Reload</button>
+                      <Show when={fileBaseNotice() === "Saved and rendered."}>
+                        <span class="hint status-ok">{fileBaseNotice()}</span>
+                      </Show>
+                    </div>
+                    <Show when={fileBaseView()} fallback={<div class="hint">Loading the base…</div>}>
+                      {(v) => <BaseTableView view={v()} />}
+                    </Show>
+                    <details class="meta-editor" open>
+                      <summary>Definition (YAML)</summary>
+                      <textarea
+                        class="rules-editor"
+                        rows={12}
+                        spellcheck={false}
+                        value={fileBaseSource()}
+                        onInput={(e) => setFileBaseSource(e.currentTarget.value)}
+                      />
+                      <div class="row" style={{ "margin-top": "8px" }}>
+                        <button class="primary" onClick={() => saveFileBase(b.path)}>Save &amp; render</button>
+                        <button onClick={() => openFileBase(b.path)}>Discard changes</button>
+                        <span class="hint">
+                          A <code class="mono">.base</code> file is a view, not a record: it has no tags,
+                          status or folder of its own.
+                        </span>
+                      </div>
+                    </details>
+                  </div>
+                </Show>
+              </div>
+            )}
+          </For>
+        </div>
       </div>
       <footer style={{ "margin-top": "8px", "font-size": "12px", color: "#a6adc8" }}>
         {records().length} records

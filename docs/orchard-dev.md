@@ -318,9 +318,13 @@ filesystem or network access, so a shared `.base` file cannot execute anything.
 ## Bases
 
 A base is a terminal view with its own rendering authority: the first *flower*.
-It is still an ordinary record with `type: base`, so it lives under
-`Records/base/`, is indexed like everything else, and needs no second database.
-Its body is a YAML query document; frontmatter remains ordinary metadata.
+There are two file forms, both under `Records/`:
+
+- a `type: base` record whose body is the YAML query, so the base can also carry
+  tags, status, a folder and other metadata;
+- a standalone `.base` file, which is the YAML query with no record
+  frontmatter. It has no index entry and can be dropped into `Records/` from any
+  editor.
 
 ```yaml
 source:
@@ -337,6 +341,12 @@ columns:
 sort: "-modified"
 limit: 100
 ```
+
+A `.base` file may add optional `id` and `title` keys; without them the file
+stem is the title and `base:<relative path>` is the identity. A broken `.base`
+file is still listed with its parse error, so it can be found and repaired
+instead of silently disappearing. Paths are confined to `Records/` and must end
+in `.base`; a command cannot read or overwrite an arbitrary file.
 
 `source` filters the index before any file is read. All fields are optional:
 `type` (exact, case-insensitive), `tag`, `folder` (the folder and its
@@ -363,6 +373,13 @@ Commands:
   definition changed by another program.
 - `create_base_cmd({ title })` creates a `type: base` record with a starter
   document and returns its id.
+- `list_base_files_cmd()` returns every `.base` file as
+  `{ id, title, path, error? }`, including broken definitions.
+- `render_base_file_cmd({ path })` and
+  `save_base_file_cmd({ path, text, expectedSource })` read and write a `.base`
+  file through the same parser and renderer as a record-backed base.
+- `create_base_file_cmd({ title })` writes a new `.base` file under
+  `Records/base/` and returns its entry.
 
 A base is read-only over other records: rendering never writes a file. That is
 the flower contract: it owns its presentation, not the data it projects.

@@ -1,9 +1,11 @@
 use lilac_core::session::{OpenReport, RecordSession};
 use lilac_core::{
     Record, Wal, BASE_TYPE, apply_rules_reported as apply_rules_core, base_starter_document,
-    create_from_template_reported, find_record_by_id, generate_record_id, list_templates,
-    move_record_to_folder, normalize_folder, parse_base, parse_rules, preview_rules, read_record,
-    record_path, rebuild_index, render_base, save_as_template, search_records, write_record,
+    create_base_file, create_from_template_reported, find_record_by_id, generate_record_id,
+    list_templates, move_record_to_folder, normalize_folder, parse_base, parse_rules,
+    preview_rules, read_base_file, read_record, record_path, rebuild_index, render_base,
+    render_base_file, save_as_template, save_base_file, scan_base_files, search_records,
+    write_record,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -672,6 +674,38 @@ fn create_base_cmd(title: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn list_base_files_cmd() -> Result<String, String> {
+    let files = scan_base_files(&records_root()).map_err(|e| e.to_string())?;
+    Ok(serde_json::to_string(&files).unwrap_or_else(|_| "[]".to_string()))
+}
+
+#[tauri::command]
+fn render_base_file_cmd(path: String) -> Result<String, String> {
+    let root = records_root();
+    let source = read_base_file(&root, &path).map_err(|e| e.to_string())?;
+    let view = render_base_file(&root, &path).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "source": source, "view": view, "path": path }).to_string())
+}
+
+#[tauri::command]
+fn save_base_file_cmd(
+    path: String,
+    text: String,
+    expected_source: Option<String>,
+) -> Result<String, String> {
+    let root = records_root();
+    let view = save_base_file(&root, &path, &text, expected_source.as_deref())
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "source": text, "view": view, "path": path }).to_string())
+}
+
+#[tauri::command]
+fn create_base_file_cmd(title: String) -> Result<String, String> {
+    let entry = create_base_file(&records_root(), &title).map_err(|e| e.to_string())?;
+    Ok(serde_json::to_string(&entry).unwrap_or_default())
+}
+
+#[tauri::command]
 fn move_records_cmd(
     state: tauri::State<Sessions>,
     ids: Vec<String>,
@@ -746,6 +780,10 @@ pub fn run() {
             render_base_cmd,
             save_base_source_cmd,
             create_base_cmd,
+            list_base_files_cmd,
+            render_base_file_cmd,
+            save_base_file_cmd,
+            create_base_file_cmd,
             undo_block_edit_cmd,
             redo_block_edit_cmd,
             records_root_path,

@@ -207,6 +207,12 @@ language](docs/orchard-dev.md#formulas). Rendering only reads records; a failed
 cell is shown as a warning instead of hiding the row. Create one with **New
 base** in the header.
 
+A base can also be a standalone `.base` file: the same YAML without record
+frontmatter. Drop one under `Records/` and it appears in the **Base files**
+section, or create one with **New .base file**. A `.base` file may set optional
+`id` and `title` keys; otherwise its filename is the title. A file that does not
+parse is listed with the error so it can be fixed.
+
 ## Block type system
 
 Block structure is declared, not hardcoded. The registry lives in

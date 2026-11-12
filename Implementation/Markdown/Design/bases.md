@@ -21,15 +21,46 @@ authority: a base, a terminal, a clock, an embedded web page. The test is
 whether arbitrary blocks can be inserted into its interior. For a base they
 cannot: it owns its table.
 
-A base is still a record. It lives under `Records/base/`, has an id, a title, a
-folder and timestamps, appears in the same index and backup, and can be moved or
-templated like anything else. The difference is only how Orchard renders it:
-when a record is `type: base`, the block editor is replaced by the base view.
+## Two file forms
+
+A base can be a record or a standalone file. A `type: base` record lives under
+`Records/base/`, has an id, a title, folder and timestamps, appears in the same
+index and backup, and can be moved or templated like anything else. A `.base`
+file is only the YAML query: no frontmatter, no index entry, no record metadata.
+It is the form for a query copied from elsewhere or edited in another program.
+
+Both are flowers: when Orchard opens one, the block editor is replaced by the
+base view. The difference is how identity and discovery work, not how the query
+runs. Keeping the record form means a user who wants tags on a dashboard does not
+need a second metadata system; keeping the file form means a query does not have
+to pretend to be a note.
+
+```yaml
+id: base_books        # optional
+title: Books          # optional; the file stem is the fallback
+source:
+  type: book
+  tag: reading
+  folder: Reading
+where: pages_total > pages_read
+columns:
+  - label: Title
+    expr: file.name
+  - status
+sort: "-modified"
+limit: 100
+```
+
+Scanning `.base` files is separate from `rebuild_index`, because a broken view
+must not disappear with a broken index. A file that does not parse is still
+listed with its error. The path is confined to `Records/` and must end in
+`.base`, so a command cannot read or overwrite an arbitrary file by claiming it
+is a flower. Creation writes atomically, like records.
 
 ## The body is the query
 
-Frontmatter stays ordinary metadata, so a base does not invent a second schema
-for identity and placement. The body is YAML:
+For a record-backed base, frontmatter stays ordinary metadata, so a base does not
+invent a second schema for identity and placement. The body is YAML:
 
 ```yaml
 source:
@@ -92,9 +123,9 @@ query permission, and that is already the same read path the UI uses.
 
 - Only one view per base, always a table. Multiple named views and list/kanban
   renderers belong in a later revision of the body schema.
-- The base is a `type: base` record, not a standalone `.base` file. Supporting
-  the extension means teaching the explorer to open non-Markdown files as
-  flowers; the query engine is ready for that step.
+- A `.base` file has no tags, status or folder of its own; put those on a
+  `type: base` record if they matter. It is discovered by scanning, not by the
+  record index.
 - The first column is the only cell that could link back to a record; row
   navigation is not built yet.
 - `source` cannot express arbitrary formulas. For those, use `where`; a future
