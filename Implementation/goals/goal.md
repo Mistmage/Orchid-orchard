@@ -14,6 +14,14 @@ related:
   - ../Tasks/active/T3-tab-groups-windows.md
   - ../Tasks/active/T7-naming-rules-ui.md
   - ../Tasks/active/T8-block-type-system.md
+  - ../Tasks/active/T9-extension-save-pipeline.md
+  - ../Tasks/active/T10-rules-organization.md
+  - ../Tasks/active/T11-classification-rules.md
+  - ../Tasks/active/T12-tabs-groups-windows-capture.md
+  - ../Tasks/active/T13-workspaces-geometry.md
+  - ../Tasks/active/T14-lifecycle-metadata.md
+  - ../Tasks/active/T15-collections.md
+  - ../Tasks/deferred/T16-ai-connector.md
 ---
 
 # Goal (organiser)
@@ -34,6 +42,12 @@ Wayfinder approach, but note-based (no GitHub).
 - Current: `Current/block-storage-surgery.md`
 - Current: `Current/solidjs-components-polish.md`
 - Tasks: T1, T2, T3, T7, T8 (active)
+
+### M4 — Capture pipeline and vault semantics (current)
+- Tasks: T9, T10, T11, T12, T13, T14, T15 (active)
+- Deferred: T16 (AI connector)
+- Design: `Markdown/Design/editor.md` (text-first editor; the block editor is an
+  interim scaffold)
 
 ### M-final — Lilac v1
 - Final: `final/lilac-v1.md`
