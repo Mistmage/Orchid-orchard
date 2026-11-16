@@ -1,11 +1,11 @@
 use lilac_core::session::{OpenReport, RecordSession};
 use lilac_core::{
-    Record, Wal, BASE_TYPE, apply_rules_reported as apply_rules_core, base_starter_document,
-    create_base_file, create_from_template_reported, find_record_by_id, generate_record_id,
-    list_templates, move_record_to_folder, normalize_folder, parse_base, parse_rules,
-    preview_rules, read_base_file, read_record, record_path, rebuild_index, render_base_file_views,
-    render_base_views, save_as_template, save_base_file, scan_base_files, search_records,
-    write_record,
+    Record, Wal, BASE_TYPE, apply_rules_reported as apply_rules_core, backfill_lifecycle,
+    base_starter_document, create_base_file, create_from_template_reported, find_record_by_id,
+    generate_record_id, list_templates, move_record_to_folder, normalize_folder, parse_base,
+    parse_rules, preview_rules, read_base_file, read_record, record_path, rebuild_index,
+    render_base_file_views, render_base_views, save_as_template, save_base_file, scan_base_files,
+    search_records, write_record,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -83,6 +83,9 @@ struct RecordView {
     status: Option<String>,
     url: Option<String>,
     folder: Option<String>,
+    created: Option<String>,
+    modified: Option<String>,
+    opened: Option<String>,
 }
 
 impl From<Record> for RecordView {
@@ -95,6 +98,9 @@ impl From<Record> for RecordView {
             status: r.status,
             url: r.url,
             folder: r.folder,
+            created: r.created,
+            modified: r.modified,
+            opened: r.opened,
         }
     }
 }
@@ -147,6 +153,9 @@ fn list_records() -> Result<Vec<RecordView>, String> {
         status: e.status,
         url: None,
         folder: e.folder,
+        created: e.created,
+        modified: e.modified,
+        opened: e.opened,
     }).collect())
 }
 
@@ -162,6 +171,9 @@ fn search(query: String) -> Result<Vec<RecordView>, String> {
         status: e.status,
         url: None,
         folder: e.folder,
+        created: e.created,
+        modified: e.modified,
+        opened: e.opened,
     }).collect())
 }
 
@@ -763,6 +775,20 @@ fn redo_block_edit_cmd(state: tauri::State<Sessions>, id: String) -> Result<Stri
 pub fn run() {
     tauri::Builder::default()
         .manage(Sessions::default())
+        .setup(|_app| {
+            // One non-destructive pass so records written before lifecycle
+            // timestamps existed still sort and display sensibly. The second
+            // run updates nothing; failures stay in the WAL, not the startup
+            // path.
+            let root = records_root();
+            if let Ok(report) = backfill_lifecycle(&root) {
+                if report.updated > 0 || !report.errors.is_empty() {
+                    let mut wal = Wal::new(lilac_host::config::config_root().join("wal.log"));
+                    let _ = wal.append("lifecycle_backfill", serde_json::json!(report));
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             list_records,
             search,

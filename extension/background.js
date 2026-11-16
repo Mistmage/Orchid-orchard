@@ -279,6 +279,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const rec = res && res.record;
         const url = rec && rec.url;
         if (url) await chrome.tabs.create({ url, active: false });
+        // Opening is not editing: the host touches only `opened`.
+        try { await send("touch_opened", { id: msg.id }); } catch (e) {}
         sendResponse({ ok: true });
       } else if (msg.type === "deleteRecord") {
         await send("delete_record", { id: msg.id });
@@ -287,13 +289,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const res = await send("load_record", { id: msg.id });
         const body = res && res.body;
         const urls = [];
+        const pageIds = [];
         if (body) {
           for (const line of body.split("\n")) {
             const m = line.match(/\[\[(.+?)\]\]/);
             if (m) {
               try {
                 const r = await send("load_record", { id: m[1] });
-                if (r && r.record && r.record.url) urls.push(r.record.url);
+                if (r && r.record && r.record.url) {
+                  urls.push(r.record.url);
+                  pageIds.push(m[1]);
+                }
               } catch (e) {}
             } else {
               const u = line.trim().replace(/^[-*]\s*/, "");
@@ -305,6 +311,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         for (const u of urls) {
           const t = await chrome.tabs.create({ url: u, active: false });
           createdTabs.push(t);
+        }
+        // Opening the set and its pages is a view, not an edit: touch only
+        // `opened`, and only for records that were actually opened.
+        try { await send("touch_opened", { id: msg.id }); } catch (e) {}
+        for (const pageId of pageIds) {
+          try { await send("touch_opened", { id: pageId }); } catch (e) {}
         }
         const tg = res && res.record && res.record.tab_group;
         if (tg && createdTabs.length && chrome.tabs.group && chrome.tabGroups && chrome.tabGroups.update) {

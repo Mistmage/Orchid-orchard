@@ -53,6 +53,13 @@ Research candidate.
 - Identity: `id`, `type`, `version`
 - Display: `title`, `icon`, `color`, `description`
 - Timestamps: `created`, `modified`, `opened`, `last_viewed` (RFC3339)
+  - `created` is set once on the first write and preserved afterwards.
+  - `modified` moves only when content or metadata actually changes; an
+    unchanged save does not rewrite the file.
+  - `opened` is the last time the record was opened as a tab from Lilac. Opening
+    updates only this field, never `modified`.
+  - `last_viewed` is reserved for viewing inside Orchard and is not set by the
+    browser path.
 - References: `parent`, `related`, `links`
 - Classification: `tags`, `categories`, `status`
 - Placement: `folder` (path relative to `Records/`; omit for the type folder)

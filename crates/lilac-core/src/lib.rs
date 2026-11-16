@@ -46,10 +46,10 @@ pub use rules::{
 };
 pub use session::{OpenReport, RecordSession, fingerprint};
 pub use storage::{
-    Index, IndexEntry, delete_record, find_record_by_id, generate_record_id, host_of,
-    move_record_to_folder, normalize_folder, read_record, read_record_with_mtime, rebuild_index,
-    record_filename, record_path, records_dir, search_records, slugify_title, write_record,
-    write_record_if_unchanged,
+    BackfillReport, Index, IndexEntry, backfill_lifecycle, delete_record, find_record_by_id,
+    generate_record_id, host_of, move_record_to_folder, normalize_folder, now_timestamp,
+    read_record, read_record_with_mtime, rebuild_index, record_filename, record_path, records_dir,
+    search_records, slugify_title, touch_opened, write_record, write_record_if_unchanged,
 };
 pub use template::{
     TEMPLATE_TYPE, TemplateInfo, create_from_template, create_from_template_reported, is_template,

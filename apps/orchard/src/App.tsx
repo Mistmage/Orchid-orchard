@@ -13,13 +13,16 @@ interface Block {
   children: Block[];
 }
 
-interface Record {
+interface RecordItem {
   id: string;
   type: string;
   title: string | null;
   tags: string[];
   status: string | null;
   folder: string | null;
+  created: string | null;
+  modified: string | null;
+  opened: string | null;
 }
 
 interface Settings {
@@ -196,8 +199,8 @@ interface BlockTypeReport {
   valid: boolean;
 }
 
-async function fetchRecords(): Promise<Record[]> {
-  return (await invoke("list_records")) as Record[];
+async function fetchRecords(): Promise<RecordItem[]> {
+  return (await invoke("list_records")) as RecordItem[];
 }
 
 interface MoveReport {
@@ -427,6 +430,14 @@ function isSectionKind(kind: any): boolean {
   return !!(kind && (kind.Heading || kind.Divider));
 }
 
+/// RFC 3339 to something a person can scan; invalid values stay visible rather
+/// than turning into "Invalid Date".
+function shortTime(value: string | null | undefined): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
 /// Declared metadata values worth showing next to the block label. `level` and
 /// `rank` are already visible in the label, and `indent: 0` is noise.
 function metaSummary(b: Block): string {
@@ -557,7 +568,7 @@ function CodeMirrorBlock(props: { initial: string; onSave: (v: string, expected:
 
   // minimal extensions: view + state + basic keymap, no history/language/autocomplete
   const extensions = [
-    keymap.of([...defaultKeymap.filter((k) => !/history/i.test(k.name || "")), indentWithTab]),
+    keymap.of([...defaultKeymap.filter((k) => !/history/i.test((k as { name?: string }).name || "")), indentWithTab]),
     EditorView.lineWrapping,
   ];
 
@@ -590,7 +601,7 @@ const ICONS: Record<string, string> = {
 };
 
 export default function App() {
-  const [records, setRecords] = createSignal<Record[]>([]);
+  const [records, setRecords] = createSignal<RecordItem[]>([]);
   const [query, setQuery] = createSignal("");
   const [expanded, setExpanded] = createSignal<string | null>(null);
   const [blocks, setBlocks] = createSignal<Block[]>([]);
@@ -827,7 +838,7 @@ export default function App() {
 
   async function load() {
     const q = query().trim();
-    const res = q ? await invoke("search", { query: q }) as Record[] : await fetchRecords();
+    const res = q ? await invoke("search", { query: q }) as RecordItem[] : await fetchRecords();
     setRecords(res);
     // Selection is a set of ids; drop ids that no longer exist after a search.
     const visible = new Set(res.map((r) => r.id));
@@ -855,7 +866,7 @@ export default function App() {
   const selectedTemplate = () => templates().find((t) => t.id === newTemplate());
 
   function toggleAll() {
-    setSelected(allSelected() ? new Set() : new Set(records().map((r) => r.id)));
+    setSelected(allSelected() ? new Set<string>() : new Set(records().map((r) => r.id)));
   }
 
   function startMove(id: string, folder: string | null) {
@@ -875,7 +886,7 @@ export default function App() {
         `Moved ${report.moved} record${report.moved === 1 ? "" : "s"}` +
         (failed ? `; ${failed} failed: ${report.errors.join("; ")}` : ""),
       );
-      setSelected(new Set());
+      setSelected(new Set<string>());
       const openId = expanded();
       await load();
       // A moved record's file changed location; refresh its view so the
@@ -1675,7 +1686,7 @@ then move "Cooking"`}</pre>
               </For>
             </datalist>
             <button class="primary" onClick={moveSelected}>Move</button>
-            <button onClick={() => { setSelected(new Set()); setMoveNotice(""); }}>Clear</button>
+            <button onClick={() => { setSelected(new Set<string>()); setMoveNotice(""); }}>Clear</button>
           </Show>
           <Show when={moveNotice()}>
             <span class={moveNotice().startsWith("Moved") && !moveNotice().includes("failed") ? "hint status-ok" : "error"}>{moveNotice()}</span>
@@ -1756,6 +1767,9 @@ then move "Cooking"`}</pre>
                     <Show when={blockNotice()}>
                       <span class="error">{blockNotice()}</span>
                     </Show>
+                  </div>
+                  <div class="hint lifecycle">
+                    Created {shortTime(r.created)} · Modified {shortTime(r.modified)} · Opened {shortTime(r.opened)}
                   </div>
                   <details class="meta-editor" open={metaOpen()} onToggle={(e) => setMetaOpen(e.currentTarget.open)}>
                     <summary>Metadata</summary>

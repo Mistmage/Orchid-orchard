@@ -146,6 +146,27 @@ entries dropped. Moving a record or editing its body changes the fingerprint, so
 the view returns the new one with every session result and the UI keeps it
 current. Metadata changes update `modified` but are not on the block undo stack.
 
+## Lifecycle timestamps
+
+Every record carries `created`, `modified` and `opened` (RFC 3339, UTC).
+`write_record` fills them, so no caller can forget:
+
+- `created` is set on the first write. For an existing file the stored value
+  wins, so a normal save never rewrites it.
+- `modified` moves only when content or metadata actually changes. Saves that
+  would produce the same bytes are skipped, which keeps file watchers and
+  backups quiet.
+- `opened` is the last time Lilac opened the record as a tab. The host's
+  `touch_opened` command updates only this field; it deliberately does not move
+  `modified`, because viewing is not editing. The extension calls it after
+  creating the tab, and also for every page a reopened collection opens.
+
+The index carries all three, so sorting and list views do not re-read files.
+At startup Orchard runs `backfill_lifecycle` once: records written before these
+fields existed take `created` from the filesystem creation time (falling back to
+mtime) and `modified` from mtime. It preserves the body and unknown fields, and
+a second run updates nothing; errors go to the WAL instead of blocking startup.
+
 ## Templates
 
 A template is an ordinary record with `type: template` and a required

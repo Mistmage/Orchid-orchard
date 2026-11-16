@@ -5,7 +5,8 @@ use config::{load_config, logs_dir, set_records_root};
 use lilac_core::{
     NamingConfig, NamingRule, Record, Wal, apply_block_edit,
     apply_rules_reported as apply_rules_core, delete_record, generate_record_id, normalize_folder,
-    parse_rules, read_record, rebuild_index, record_path, search_records, write_record,
+    parse_rules, read_record, rebuild_index, record_path, search_records, touch_opened,
+    write_record,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -252,6 +253,18 @@ fn dispatch(records_root: &std::path::Path, method: &str, params: Value) -> Resu
                 find_record_path(records_root, id).ok_or_else(|| format!("not found: {}", id))?;
             let (rec, body) = read_record(&path).map_err(|e| e.to_string())?;
             Ok(json!({ "record": rec, "body": body, "path": path.to_string_lossy() }))
+        }
+        "touch_opened" => {
+            // Lilac opened this record as a tab. Only `opened` moves; the record
+            // did not become edited just because it was viewed.
+            let id = params
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or("missing id")?;
+            let path =
+                find_record_path(records_root, id).ok_or_else(|| format!("not found: {}", id))?;
+            let opened = touch_opened(&path).map_err(|e| e.to_string())?;
+            Ok(json!({ "id": id, "opened": opened }))
         }
         "search_records" => {
             let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
@@ -540,9 +553,68 @@ fn idx_records_to_json(idx: &lilac_core::Index) -> Value {
                 "title": e.title,
                 "tags": e.tags,
                 "path": e.path,
+                "created": e.created,
                 "modified": e.modified,
+                "opened": e.opened,
             })
         })
         .collect();
     json!({ "records": arr })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    fn call(root: &Path, method: &str, params: Value) -> Value {
+        handle(root, json!({ "id": 1, "method": method, "params": params }))
+    }
+
+    fn record_path_of(root: &Path, id: &str) -> std::path::PathBuf {
+        find_record_path(root, id).expect("record on disk")
+    }
+
+    #[test]
+    fn saves_are_stamped_and_opening_only_touches_opened() {
+        let config = TempDir::new().unwrap();
+        // SAFETY: this test is the only one in the crate; the process does not
+        // create threads that read the config root concurrently.
+        unsafe { std::env::set_var("LILAC_CONFIG_ROOT", config.path()) };
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        let saved = call(
+            root,
+            "save_record",
+            json!({ "record": { "id": "rec_life", "type": "page", "title": "Life" }, "body": "text" }),
+        );
+        assert_eq!(saved.get("ok").and_then(|v| v.as_bool()), Some(true));
+        let path = record_path_of(root, "rec_life");
+        let (first, body) = read_record(&path).unwrap();
+        assert_eq!(body.as_deref(), Some("text"));
+        let created = first.created.clone().expect("created is automatic");
+        let modified = first.modified.clone().expect("modified is automatic");
+        assert_eq!(created, modified);
+        assert!(first.opened.is_none());
+
+        let touched = call(root, "touch_opened", json!({ "id": "rec_life" }));
+        assert_eq!(touched.get("ok").and_then(|v| v.as_bool()), Some(true));
+        let (second, _) = read_record(&path).unwrap();
+        assert_eq!(second.created, first.created);
+        assert_eq!(second.modified, first.modified);
+        assert!(second.opened.is_some());
+
+        let updated = call(
+            root,
+            "update_record",
+            json!({ "id": "rec_life", "patch": { "title": "Life, edited" } }),
+        );
+        assert_eq!(updated.get("ok").and_then(|v| v.as_bool()), Some(true));
+        let (third, _) = read_record(&path).unwrap();
+        assert_eq!(third.created, first.created);
+        assert_ne!(third.modified, first.modified);
+        assert_eq!(third.opened, second.opened);
+    }
 }
