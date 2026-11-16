@@ -86,6 +86,7 @@ struct RecordView {
     created: Option<String>,
     modified: Option<String>,
     opened: Option<String>,
+    item_count: usize,
 }
 
 impl From<Record> for RecordView {
@@ -101,6 +102,7 @@ impl From<Record> for RecordView {
             created: r.created,
             modified: r.modified,
             opened: r.opened,
+            item_count: r.items.len(),
         }
     }
 }
@@ -156,6 +158,7 @@ fn list_records() -> Result<Vec<RecordView>, String> {
         created: e.created,
         modified: e.modified,
         opened: e.opened,
+        item_count: e.item_count,
     }).collect())
 }
 
@@ -174,6 +177,7 @@ fn search(query: String) -> Result<Vec<RecordView>, String> {
         created: e.created,
         modified: e.modified,
         opened: e.opened,
+        item_count: e.item_count,
     }).collect())
 }
 
@@ -184,6 +188,34 @@ fn load_record(id: String) -> Result<String, String> {
     let path = find_record_by_id(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
     let (rec, body) = read_record(&path).map_err(|e| e.to_string())?;
     Ok(serde_json::to_string(&serde_json::json!({"record": rec, "body": body})).unwrap_or_default())
+}
+
+#[tauri::command]
+fn collection_items_cmd(id: String) -> Result<String, String> {
+    let root = records_root();
+    let path =
+        find_record_by_id(&root, &id).ok_or_else(|| format!("not found: {}", id))?;
+    let (record, body) = read_record(&path).map_err(|e| e.to_string())?;
+    let mut entries = lilac_core::collection_entries(&record, body.as_deref());
+    // A legacy body or a hand-added entry may lack the page's current title and
+    // URL. Fill them from the referenced record without changing the file.
+    for entry in &mut entries {
+        let Some(page_id) = entry.id.clone() else { continue };
+        if !entry.url.is_empty() && entry.title.is_some() {
+            continue;
+        }
+        if let Some(page_path) = find_record_by_id(&root, &page_id) {
+            if let Ok((page, _)) = read_record(&page_path) {
+                if entry.url.is_empty() {
+                    entry.url = page.url.unwrap_or_default();
+                }
+                if entry.title.is_none() {
+                    entry.title = page.title;
+                }
+            }
+        }
+    }
+    Ok(serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_string()))
 }
 
 #[tauri::command]
@@ -793,6 +825,7 @@ pub fn run() {
             list_records,
             search,
             load_record,
+            collection_items_cmd,
             get_blocks,
             apply_block_edit_cmd,
             insert_block_cmd,

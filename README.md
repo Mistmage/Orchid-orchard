@@ -182,6 +182,35 @@ Files are the database. The index is a cache and can always be rebuilt from
 disk. Records never store browser `window_id`/`tab_id`; browser data is only a
 hint used to propose placement.
 
+Every record also carries `created`, `modified` and `opened` timestamps.
+`created` is set once, `modified` changes only when the file really changes, and
+`opened` records the last time Lilac opened it as a tab without pretending the
+record was edited. Old files gain sensible values from their file times on the
+next start.
+
+## Collections
+
+A collection is a set of saved tabs. It is an ordinary `type: collection` record
+whose frontmatter lists its members in order:
+
+```yaml
+type: collection
+title: Saved tabs — Design
+items:
+  - id: rec_1793141421839
+    url: https://example.com/a
+    title: A page
+    group: Design
+    group_color: blue
+    pinned: false
+```
+
+The Markdown body mirrors the same list as `- [[id]]` links, so the file remains
+readable and portable. The frontmatter is authoritative; a body without `items`
+is still parsed, so collections written by older versions keep working. Orchard
+shows the item count in the list and the entries (with tab group names) in the
+expanded record; the popup shows the count and opens the whole set.
+
 ## Bases
 
 A base is a saved query that renders as a table. It is an ordinary record with

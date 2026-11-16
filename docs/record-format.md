@@ -65,6 +65,11 @@ Research candidate.
 - Placement: `folder` (path relative to `Records/`; omit for the type folder)
 - Template: `target_type` (required when `type: template`; the type it produces)
 - Page: `url`
+- Collection: `items` — an ordered list of
+  `{ id, url, title, group, group_color, pinned }`; the body mirrors it as a
+  Markdown list of `[[id]]` links. The structured list is authoritative and a
+  legacy body without `items` is still parsed. The extension also stores
+  `saved_from` (`selection` or `group`) in the open metadata.
 - Browser metadata (optional, ephemeral, treated as hints): `open`, `position`,
   `tab_group`, `window_hint`
   - `tab_group`: `{ title, color }` of the browser tab group, if any.

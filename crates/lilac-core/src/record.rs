@@ -60,6 +60,10 @@ pub struct Record {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
 
+    // collection membership (ordered); the body mirrors it as a Markdown list
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<crate::collection::CollectionEntry>,
+
     // wisteria-compat (reserved, no-op v0.1)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authority: Option<String>,
@@ -102,6 +106,7 @@ impl Record {
             status: None,
             url: None,
             folder: None,
+            items: vec![],
             authority: None,
             lineage: None,
             forked_from: None,

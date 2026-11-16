@@ -31,7 +31,11 @@ pub use block_types::{
     classify_line, describe as describe_block_types, registry as block_type_registry,
     validate_registry as validate_block_registry,
 };
-pub use collection::{CollectionItem, parse_collection_body, render_collection_body};
+pub use collection::{
+    CollectionEntry, CollectionItem, collection_entries, dedupe_entries, parse_collection_body,
+    parse_collection_entries, render_collection_body, render_collection_entries,
+    set_collection_entries,
+};
 pub use editor::BlockEditor;
 pub use error::Error;
 pub use formula::{

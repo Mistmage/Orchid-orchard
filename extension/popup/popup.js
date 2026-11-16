@@ -144,9 +144,10 @@ async function renderCollections() {
   list.innerHTML = items.map((r) => `
     <div class="item">
       <div class="title">${escape(r.title || r.id)}</div>
-      <div class="url">${escape(r.id)}</div>
+      <div class="url">${r.item_count || 0} tab${(r.item_count || 0) === 1 ? "" : "s"}${r.tab_group && r.tab_group.title ? " · " + escape(r.tab_group.title) : ""} · ${escape(r.id)}</div>
       <div class="row">
         <button data-reopen="${escape(r.id)}">Open all</button>
+        <button data-edit="${escape(r.id)}">Edit</button>
         <button data-del="${escape(r.id)}">Delete</button>
       </div>
     </div>
@@ -155,6 +156,11 @@ async function renderCollections() {
     btn.addEventListener("click", async () => {
       const res = await call("reopenCollection", { id: btn.dataset.reopen });
       setStatus("Opened " + (res && res.count ? res.count : 0) + " tabs");
+    });
+  });
+  list.querySelectorAll("[data-edit]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await openEditor(btn.dataset.edit);
     });
   });
   list.querySelectorAll("[data-del]").forEach((btn) => {
@@ -297,10 +303,6 @@ async function render() {
   else if (currentView === "tags") await renderTags();
   else if (currentView === "search") await renderSearch();
   else if (currentView === "settings") await renderSettings();
-  if (currentView === "recent") await renderRecent();
-  else if (currentView === "collections") await renderCollections();
-  else if (currentView === "tags") await renderTags();
-  else if (currentView === "search") await renderSearch();
 }
 
 document.querySelectorAll("nav button").forEach((b) => {

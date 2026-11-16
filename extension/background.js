@@ -211,25 +211,45 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         if (groupIds.size === 1 && chrome.tabGroups && chrome.tabGroups.get) {
           try { sharedGroup = await chrome.tabGroups.get([...groupIds][0]); } catch (e) {}
         }
-        // save each as page, in the chosen folder
-        const ids = [];
+        // Save each tab as a page and keep one structured entry per page, so the
+        // collection can show titles, groups and order without re-reading the
+        // body or guessing from links.
+        const entries = [];
         for (const t of list) {
           const record = { type: "page", title: t.title || "", url: t.url || "", tags: [] };
           if (folder) record.folder = folder;
           if (hints.has(t.id)) record.window_hint = hints.get(t.id);
+          let group = null;
           if (t.groupId && t.groupId !== -1 && chrome.tabGroups && chrome.tabGroups.get) {
             try {
               const g = await chrome.tabGroups.get(t.groupId);
-              if (g) record.tab_group = { title: g.title || "", color: g.color || "" };
+              if (g) {
+                group = { title: g.title || "", color: g.color || "" };
+                record.tab_group = group;
+              }
             } catch (e) {}
           }
           const r = await send("save_record", { record, body: "" });
-          ids.push(r.id);
+          const entry = { id: r.id, url: t.url || "", title: t.title || "", pinned: !!t.pinned };
+          if (group) {
+            entry.group = group.title;
+            entry.group_color = group.color;
+          }
+          entries.push(entry);
         }
         // The collection is its own record type. Putting it in the page folder
         // (the usual default) made it appear as a page and buried it.
-        const body = ids.map((id) => "- [[" + id + "]]").join("\n");
-        const col = { type: "collection", title: "Saved tabs " + new Date().toISOString(), tags: [] };
+        const body = entries.map((entry) => "- [[" + entry.id + "]]").join("\n");
+        const label = sharedGroup && sharedGroup.title
+          ? "Saved tabs — " + sharedGroup.title
+          : "Saved tabs " + new Date().toLocaleString();
+        const col = {
+          type: "collection",
+          title: label,
+          tags: [],
+          items: entries,
+          saved_from: sharedGroup ? "group" : "selection",
+        };
         if (sharedGroup) col.tab_group = { title: sharedGroup.title || "", color: sharedGroup.color || "" };
         const summary = await windowSummary(list[0].windowId, list.length);
         if (summary) col.window_hint = summary;
@@ -287,45 +307,74 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ ok: true });
       } else if (msg.type === "reopenCollection") {
         const res = await send("load_record", { id: msg.id });
+        const rec = res && res.record;
+        // Structured entries are authoritative; older collections are read from
+        // the body so they still open.
+        let entries = rec && Array.isArray(rec.items) ? rec.items.slice() : [];
         const body = res && res.body;
-        const urls = [];
-        const pageIds = [];
-        if (body) {
+        if (!entries.length && body) {
           for (const line of body.split("\n")) {
             const m = line.match(/\[\[(.+?)\]\]/);
             if (m) {
               try {
                 const r = await send("load_record", { id: m[1] });
-                if (r && r.record && r.record.url) {
-                  urls.push(r.record.url);
-                  pageIds.push(m[1]);
-                }
+                if (r && r.record) entries.push({ id: m[1], url: r.record.url || "", title: r.record.title || "" });
               } catch (e) {}
             } else {
               const u = line.trim().replace(/^[-*]\s*/, "");
-              if (u.startsWith("http")) urls.push(u);
+              if (u.startsWith("http")) entries.push({ url: u });
             }
           }
         }
+        // Fill missing URLs from the page records without dropping order.
+        for (const entry of entries) {
+          if (!entry.url && entry.id) {
+            try {
+              const r = await send("load_record", { id: entry.id });
+              if (r && r.record) {
+                entry.url = r.record.url || "";
+                entry.title = entry.title || r.record.title || "";
+              }
+            } catch (e) {}
+          }
+        }
+        const opened = entries.filter((entry) => entry.url);
         const createdTabs = [];
-        for (const u of urls) {
-          const t = await chrome.tabs.create({ url: u, active: false });
+        for (const entry of opened) {
+          const t = await chrome.tabs.create({ url: entry.url, active: false, pinned: !!entry.pinned });
           createdTabs.push(t);
         }
         // Opening the set and its pages is a view, not an edit: touch only
         // `opened`, and only for records that were actually opened.
         try { await send("touch_opened", { id: msg.id }); } catch (e) {}
-        for (const pageId of pageIds) {
-          try { await send("touch_opened", { id: pageId }); } catch (e) {}
+        for (const entry of opened) {
+          if (entry.id) {
+            try { await send("touch_opened", { id: entry.id }); } catch (e) {}
+          }
         }
-        const tg = res && res.record && res.record.tab_group;
+        // Rebuild the group shape: one group for the whole set when the
+        // collection captured a shared group, otherwise per entry.
+        const tg = rec && rec.tab_group;
         if (tg && createdTabs.length && chrome.tabs.group && chrome.tabGroups && chrome.tabGroups.update) {
           try {
             const groupId = await chrome.tabs.group({ tabIds: createdTabs.map((t) => t.id) });
             await chrome.tabGroups.update(groupId, { title: tg.title || "", color: tg.color || "grey" });
           } catch (e) {}
+        } else if (chrome.tabs.group && chrome.tabGroups && chrome.tabGroups.update) {
+          const byGroup = new Map();
+          opened.forEach((entry, i) => {
+            if (!entry.group) return;
+            if (!byGroup.has(entry.group)) byGroup.set(entry.group, { color: entry.group_color || "grey", tabs: [] });
+            byGroup.get(entry.group).tabs.push(createdTabs[i]);
+          });
+          for (const [title, info] of byGroup) {
+            try {
+              const groupId = await chrome.tabs.group({ tabIds: info.tabs.map((t) => t.id) });
+              await chrome.tabGroups.update(groupId, { title, color: info.color });
+            } catch (e) {}
+          }
         }
-        sendResponse({ ok: true, count: urls.length });
+        sendResponse({ ok: true, count: createdTabs.length });
       } else {
         sendResponse({ ok: false, error: "unknown type" });
       }

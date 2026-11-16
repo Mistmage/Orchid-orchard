@@ -167,6 +167,27 @@ fields existed take `created` from the filesystem creation time (falling back to
 mtime) and `modified` from mtime. It preserves the body and unknown fields, and
 a second run updates nothing; errors go to the WAL instead of blocking startup.
 
+## Collections
+
+`type: collection` records keep their members in two representations that are
+written together from one in-memory list:
+
+- `items` in frontmatter, an ordered list of
+  `{ id, url, title, group, group_color, pinned }` — the authoritative form;
+- a Markdown body of `- [[id]]` lines, for reading and portability.
+
+`crates/lilac-core/src/collection.rs` owns both. `collection_entries` prefers
+`record.items` and falls back to `parse_collection_entries(body)`, so a
+collection written before `items` existed still opens. `set_collection_entries`
+de-duplicates by record id (or URL), writes the list back and renders the body,
+which is why the two cannot drift. `IndexEntry.item_count` counts structured
+entries, or legacy body entries, so the list view does not read every file.
+
+`collection_items_cmd({ id })` returns the entries with missing titles and URLs
+filled from the referenced page records. Orchard shows the count in the list and
+the ordered entries with group badges in the expanded record; the extension
+shows the count and reopens the set in order, including pinned tabs and groups.
+
 ## Templates
 
 A template is an ordinary record with `type: template` and a required

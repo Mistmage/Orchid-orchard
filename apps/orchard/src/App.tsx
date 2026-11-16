@@ -23,6 +23,16 @@ interface RecordItem {
   created: string | null;
   modified: string | null;
   opened: string | null;
+  item_count: number;
+}
+
+interface CollectionEntry {
+  id: string | null;
+  url: string;
+  title: string | null;
+  group: string | null;
+  group_color: string | null;
+  pinned: boolean;
 }
 
 interface Settings {
@@ -201,6 +211,10 @@ interface BlockTypeReport {
 
 async function fetchRecords(): Promise<RecordItem[]> {
   return (await invoke("list_records")) as RecordItem[];
+}
+
+async function fetchCollectionItems(id: string): Promise<CollectionEntry[]> {
+  return JSON.parse(await invoke<string>("collection_items_cmd", { id })) as CollectionEntry[];
 }
 
 interface MoveReport {
@@ -606,6 +620,8 @@ export default function App() {
   const [expanded, setExpanded] = createSignal<string | null>(null);
   const [blocks, setBlocks] = createSignal<Block[]>([]);
   const [blockNotice, setBlockNotice] = createSignal("");
+  const [collectionEntries, setCollectionEntries] = createSignal<CollectionEntry[]>([]);
+  const [collectionNotice, setCollectionNotice] = createSignal("");
   const [composerOpen, setComposerOpen] = createSignal(false);
   const [composerAfter, setComposerAfter] = createSignal<number[] | null>(null);
   const [composerType, setComposerType] = createSignal("paragraph");
@@ -1062,12 +1078,23 @@ export default function App() {
     setRulePreview([]);
     setRulePreviewNotice("");
     setExpandedBaseFile(null);
+    setCollectionEntries([]);
+    setCollectionNotice("");
     if (expanded() === id) { setExpanded(null); setBlocks([]); return; }
     setExpanded(id);
     const card = records().find((r) => r.id === id);
     if (card && card.type.toLowerCase() === "base") {
       setBlocks([]);
       openBase(id);
+      return;
+    }
+    if (card && card.type.toLowerCase() === "collection") {
+      setBlocks([]);
+      try {
+        setCollectionEntries(await fetchCollectionItems(id));
+      } catch (e) {
+        setCollectionNotice("Could not read collection items: " + String(e));
+      }
       return;
     }
     try {
@@ -1711,7 +1738,7 @@ then move "Cooking"`}</pre>
                   <span class="folder-badge" title={"Records/" + r.folder}>Records/{r.folder}</span>
                 </Show>
               </div>
-              <div class="meta">{r.id} · {r.type}{r.status ? " · " + r.status : ""}</div>
+              <div class="meta">{r.id} · {r.type}{r.status ? " · " + r.status : ""}{r.item_count ? " · " + r.item_count + (r.item_count === 1 ? " item" : " items") : ""}</div>
               <div class="tags">{(r.tags || []).join(", ")}</div>
               <Show when={expanded() === r.id}>
                 <Show
@@ -1755,6 +1782,33 @@ then move "Cooking"`}</pre>
                     </div>
                   }
                 >
+                <Show when={r.type.toLowerCase() === "collection"}>
+                  <div class="collection-view" style={{ "margin-top": "8px" }} onClick={(e) => e.stopPropagation()}>
+                    <div class="row">
+                      <b>{r.item_count} item{r.item_count === 1 ? "" : "s"}</b>
+                      <span class="hint">Structured items from the frontmatter; the Markdown body mirrors them.</span>
+                      <Show when={collectionNotice()}><span class="error">{collectionNotice()}</span></Show>
+                    </div>
+                    <Show when={collectionEntries().length > 0} fallback={<div class="hint">No items in this collection yet.</div>}>
+                      <ol class="collection-items">
+                        <For each={collectionEntries()}>
+                          {(entry, i) => (
+                            <li class="collection-item">
+                              <span class="collection-index">{i() + 1}</span>
+                              <span class="collection-title">{entry.title || entry.url || entry.id}</span>
+                              <Show when={entry.group}>
+                                <span class="group-badge" data-color={entry.group_color || ""}>{entry.group}</span>
+                              </Show>
+                              <Show when={entry.url}>
+                                <span class="hint mono collection-url">{entry.url}</span>
+                              </Show>
+                            </li>
+                          )}
+                        </For>
+                      </ol>
+                    </Show>
+                  </div>
+                </Show>
                 <div class="blocks" style={{ "margin-top": "8px", cursor: "default" }} onClick={(e) => e.stopPropagation()}>
                   <div class="row" style={{ "margin-bottom": "6px" }}>
                     <button onClick={(e) => { e.stopPropagation(); undo(r.id); }} title="Undo the last block edit">Undo</button>

@@ -498,6 +498,14 @@ pub struct IndexEntry {
     pub modified: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opened: Option<String>,
+    /// Number of entries in a collection; zero for every other type, so lists
+    /// can show the size without reading the file.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub item_count: usize,
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 pub fn rebuild_index(records_root: &Path) -> Result<Index, Error> {
@@ -507,12 +515,22 @@ pub fn rebuild_index(records_root: &Path) -> Result<Index, Error> {
         return Ok(Index { records });
     }
     walk_md(&records_subdir, &mut |path| {
-        if let Ok((rec, _body)) = read_record(path) {
+        if let Ok((rec, body)) = read_record(path) {
             let rel = path
                 .strip_prefix(records_root)
                 .ok()
                 .and_then(|p| p.to_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| path.to_string_lossy().to_string());
+            // A legacy collection has entries only in its body; count them here
+            // so list views do not have to read the file to show a size.
+            let item_count =
+                if rec.r#type.eq_ignore_ascii_case("collection") && rec.items.is_empty() {
+                    body.as_deref()
+                        .map(|text| crate::collection::parse_collection_body(text).len())
+                        .unwrap_or(0)
+                } else {
+                    rec.items.len()
+                };
             records.push(IndexEntry {
                 id: rec.id,
                 r#type: rec.r#type,
@@ -524,6 +542,7 @@ pub fn rebuild_index(records_root: &Path) -> Result<Index, Error> {
                 created: rec.created,
                 modified: rec.modified,
                 opened: rec.opened,
+                item_count,
             });
         }
     })?;
@@ -699,6 +718,26 @@ mod tests {
         let second = backfill_lifecycle(root).unwrap();
         assert_eq!(second.scanned, 1);
         assert_eq!(second.updated, 0);
+    }
+
+    #[test]
+    fn legacy_collection_body_is_counted_in_the_index() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let path = root.join("Records/collection/legacy.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "---\nid: rec_collegacy\ntype: collection\ntitle: Old set\n---\n\n- [[rec_a]]\n- https://example.com\n",
+        )
+        .unwrap();
+        let index = rebuild_index(root).unwrap();
+        let entry = index
+            .records
+            .iter()
+            .find(|e| e.id == "rec_collegacy")
+            .expect("indexed");
+        assert_eq!(entry.item_count, 2);
     }
 
     #[test]
