@@ -99,7 +99,38 @@ pub struct BaseSpec {
     pub sort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
+    /// Named views of the same source. Empty means one implicit table view made
+    /// from the top-level fields. A view inherits every field it does not set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<BaseViewSpec>,
     // Parsed forms are not part of the document.
+    #[serde(skip)]
+    filter_expr: Option<Expr>,
+    #[serde(skip)]
+    sort_expr: Option<Expr>,
+    #[serde(skip)]
+    sort_descending: bool,
+}
+
+/// One named view inside a base. `type` defaults to `table`; the field exists so
+/// a future list or board view can be declared without changing the file shape.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct BaseViewSpec {
+    pub name: String,
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub view_type: Option<String>,
+    #[serde(default, rename = "where", skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_columns",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub columns: Option<Vec<BaseColumn>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
     #[serde(skip)]
     filter_expr: Option<Expr>,
     #[serde(skip)]
@@ -116,6 +147,7 @@ impl Default for BaseSpec {
             columns: default_columns(),
             sort: None,
             limit: None,
+            views: Vec::new(),
             filter_expr: None,
             sort_expr: None,
             sort_descending: false,
@@ -139,8 +171,21 @@ where
     D: serde::Deserializer<'de>,
 {
     let raw = Vec::<RawColumn>::deserialize(deserializer)?;
-    Ok(raw
-        .into_iter()
+    Ok(raw_columns(raw))
+}
+
+fn deserialize_optional_columns<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<BaseColumn>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<Vec<RawColumn>>::deserialize(deserializer)?;
+    Ok(raw.map(raw_columns))
+}
+
+fn raw_columns(raw: Vec<RawColumn>) -> Vec<BaseColumn> {
+    raw.into_iter()
         .map(|c| match c {
             RawColumn::Simple(expr) => BaseColumn {
                 label: expr.clone(),
@@ -153,7 +198,7 @@ where
                 parsed: None,
             },
         })
-        .collect())
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -167,6 +212,8 @@ pub struct BaseRow {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct BaseView {
+    /// Name of the view; `Table` for an unnamed single-view base.
+    pub name: String,
     pub labels: Vec<String>,
     pub rows: Vec<BaseRow>,
     /// Records that passed the source filter and `where`, before `limit`.
@@ -200,28 +247,100 @@ pub fn parse_base(text: &str) -> Result<BaseSpec, String> {
         spec.filter_expr = Some(parse_formula(&filter).map_err(|e| format!("where: {}", e))?);
     }
     if let Some(raw) = spec.sort.clone() {
-        let (text, descending) = match raw.trim().strip_prefix('-') {
-            Some(rest) => (rest.trim().to_string(), true),
-            None => (raw.trim().to_string(), false),
-        };
-        if text.is_empty() {
-            return Err("sort: expected an expression".into());
-        }
-        spec.sort_expr = Some(parse_formula(&text).map_err(|e| format!("sort: {}", e))?);
+        let (expr, descending) = parse_sort(&raw, "sort")?;
+        spec.sort_expr = Some(expr);
         spec.sort_descending = descending;
     }
     if spec.limit == Some(0) {
         return Err("limit must be greater than zero".into());
     }
+    validate_views(&mut spec.views)?;
     Ok(spec)
 }
 
-/// Render a base against the files currently under `records_root`.
+fn parse_sort(raw: &str, context: &str) -> Result<(Expr, bool), String> {
+    let (text, descending) = match raw.trim().strip_prefix('-') {
+        Some(rest) => (rest.trim().to_string(), true),
+        None => (raw.trim().to_string(), false),
+    };
+    if text.is_empty() {
+        return Err(format!("{context}: expected an expression"));
+    }
+    let expr = parse_formula(&text).map_err(|e| format!("{context}: {e}"))?;
+    Ok((expr, descending))
+}
+
+/// Validate view declarations at save time, so a broken named view is a
+/// definition error rather than a view that silently disappears at render.
+fn validate_views(views: &mut [BaseViewSpec]) -> Result<(), String> {
+    let mut names = Vec::new();
+    for (index, view) in views.iter_mut().enumerate() {
+        let name = view.name.trim().to_string();
+        if name.is_empty() {
+            return Err(format!("view {}: name is required", index + 1));
+        }
+        if names.iter().any(|n: &String| n.eq_ignore_ascii_case(&name)) {
+            return Err(format!("view {:?}: duplicate name", name));
+        }
+        names.push(name.clone());
+        view.name = name.clone();
+        if let Some(kind) = &view.view_type
+            && !kind.trim().eq_ignore_ascii_case("table")
+        {
+            return Err(format!(
+                "view {:?}: unsupported type {:?} (only table)",
+                name,
+                kind.trim()
+            ));
+        }
+        if let Some(columns) = &mut view.columns {
+            if columns.is_empty() {
+                return Err(format!("view {:?}: columns cannot be empty", name));
+            }
+            for column in columns.iter_mut() {
+                let expr = parse_formula(&column.expr)
+                    .map_err(|e| format!("view {:?} column {:?}: {}", name, column.label, e))?;
+                column.parsed = Some(expr);
+            }
+        }
+        if let Some(filter) = view.filter.clone() {
+            view.filter_expr =
+                Some(parse_formula(&filter).map_err(|e| format!("view {:?} where: {}", name, e))?);
+        }
+        if let Some(raw) = view.sort.clone() {
+            let (expr, descending) = parse_sort(&raw, &format!("view {:?} sort", name))?;
+            view.sort_expr = Some(expr);
+            view.sort_descending = descending;
+        }
+        if view.limit == Some(0) {
+            return Err(format!("view {:?}: limit must be greater than zero", name));
+        }
+    }
+    Ok(())
+}
+
+/// Render the first view of a base. Kept as the simple entry point for callers
+/// that do not need the named view list.
 pub fn render_base(records_root: &Path, spec: &BaseSpec) -> Result<BaseView, Error> {
+    let mut views = render_base_views(records_root, spec)?;
+    Ok(views.remove(0))
+}
+
+/// Render every view in one pass: each candidate record is read once and then
+/// evaluated against each view's own filter, columns and sort. That keeps a
+/// six-view base from reading the same file six times.
+pub fn render_base_views(records_root: &Path, spec: &BaseSpec) -> Result<Vec<BaseView>, Error> {
     let index = rebuild_index(records_root)?;
+    let resolved = resolved_views(spec);
+    let mut accumulators: Vec<ViewAccumulator> = resolved
+        .iter()
+        .map(|view| ViewAccumulator {
+            labels: view.columns.iter().map(|c| c.label.clone()).collect(),
+            rows: Vec::new(),
+            warnings: Vec::new(),
+        })
+        .collect();
     let mut scanned = 0usize;
-    let mut warnings = Vec::new();
-    let mut rows: Vec<(BaseRow, Option<FormulaValue>)> = Vec::new();
 
     for entry in &index.records {
         if !source_matches(&spec.source, entry) {
@@ -232,77 +351,140 @@ pub fn render_base(records_root: &Path, spec: &BaseSpec) -> Result<BaseView, Err
         let record = match read_record(&path) {
             Ok((record, _body)) => record,
             Err(e) => {
-                warnings.push(format!("{}: {}", entry.path, e));
+                for accumulator in &mut accumulators {
+                    accumulator.warnings.push(format!("{}: {}", entry.path, e));
+                }
                 continue;
             }
         };
-        if let Some(filter) = &spec.filter_expr {
-            match eval_formula(filter, &record) {
-                Ok(value) if value.truthy() => {}
-                Ok(_) => continue,
-                Err(e) => {
-                    warnings.push(format!("{}: where: {}", entry.id, e));
-                    continue;
+        for (accumulator, view) in accumulators.iter_mut().zip(&resolved) {
+            if let Some(filter) = view.filter {
+                match eval_formula(filter, &record) {
+                    Ok(value) if value.truthy() => {}
+                    Ok(_) => continue,
+                    Err(e) => {
+                        accumulator
+                            .warnings
+                            .push(format!("{}: where: {}", entry.id, e));
+                        continue;
+                    }
                 }
             }
-        }
-        let mut cells = Vec::with_capacity(spec.columns.len());
-        for column in &spec.columns {
-            let expr = column
-                .parsed
-                .as_ref()
-                .expect("parse_base stores parsed expressions");
-            match eval_formula(expr, &record) {
-                Ok(value) => cells.push(value.display()),
-                Err(e) => {
-                    warnings.push(format!("{}: column {:?}: {}", entry.id, column.label, e));
-                    cells.push(String::new());
+            let mut cells = Vec::with_capacity(view.columns.len());
+            for column in view.columns {
+                let expr = column
+                    .parsed
+                    .as_ref()
+                    .expect("parse_base stores parsed expressions");
+                match eval_formula(expr, &record) {
+                    Ok(value) => cells.push(value.display()),
+                    Err(e) => {
+                        accumulator
+                            .warnings
+                            .push(format!("{}: column {:?}: {}", entry.id, column.label, e));
+                        cells.push(String::new());
+                    }
                 }
             }
+            let sort_value = match view.sort_expr {
+                Some(expr) => match eval_formula(expr, &record) {
+                    Ok(value) => Some(value),
+                    Err(e) => {
+                        accumulator
+                            .warnings
+                            .push(format!("{}: sort: {}", entry.id, e));
+                        None
+                    }
+                },
+                None => None,
+            };
+            accumulator.rows.push((
+                BaseRow {
+                    id: record.id.clone(),
+                    title: record.title.clone(),
+                    path: entry.path.clone(),
+                    cells,
+                },
+                sort_value,
+            ));
         }
-        let sort_value = match &spec.sort_expr {
-            Some(expr) => match eval_formula(expr, &record) {
-                Ok(value) => Some(value),
-                Err(e) => {
-                    warnings.push(format!("{}: sort: {}", entry.id, e));
-                    None
-                }
-            },
-            None => None,
-        };
-        rows.push((
-            BaseRow {
-                id: record.id.clone(),
-                title: record.title.clone(),
-                path: entry.path.clone(),
-                cells,
-            },
-            sort_value,
-        ));
     }
 
-    if spec.sort_expr.is_some() {
-        rows.sort_by(|a, b| {
-            let ord = compare_values(a.1.as_ref(), b.1.as_ref());
-            if spec.sort_descending {
-                ord.reverse()
+    Ok(accumulators
+        .into_iter()
+        .zip(resolved)
+        .map(|(accumulator, view)| {
+            let mut rows = accumulator.rows;
+            if view.sort_expr.is_some() {
+                rows.sort_by(|a, b| {
+                    let ord = compare_values(a.1.as_ref(), b.1.as_ref());
+                    if view.sort_descending {
+                        ord.reverse()
+                    } else {
+                        ord
+                    }
+                });
+            }
+            let matched = rows.len();
+            if let Some(limit) = view.limit {
+                rows.truncate(limit);
+            }
+            BaseView {
+                name: view.name,
+                labels: accumulator.labels,
+                rows: rows.into_iter().map(|(row, _)| row).collect(),
+                matched,
+                scanned,
+                warnings: accumulator.warnings,
+            }
+        })
+        .collect())
+}
+
+struct ViewAccumulator {
+    labels: Vec<String>,
+    rows: Vec<(BaseRow, Option<FormulaValue>)>,
+    warnings: Vec<String>,
+}
+
+struct ResolvedView<'a> {
+    name: String,
+    filter: Option<&'a Expr>,
+    columns: &'a [BaseColumn],
+    sort_expr: Option<&'a Expr>,
+    sort_descending: bool,
+    limit: Option<usize>,
+}
+
+/// Apply inheritance: a view overrides a top-level field only when it declares
+/// one. `None` is "inherit", not "unset", which is what makes a base with a
+/// shared source and one `where` per view cheap to write.
+fn resolved_views(spec: &BaseSpec) -> Vec<ResolvedView<'_>> {
+    if spec.views.is_empty() {
+        return vec![ResolvedView {
+            name: "Table".to_string(),
+            filter: spec.filter_expr.as_ref(),
+            columns: &spec.columns,
+            sort_expr: spec.sort_expr.as_ref(),
+            sort_descending: spec.sort_descending,
+            limit: spec.limit,
+        }];
+    }
+    spec.views
+        .iter()
+        .map(|view| ResolvedView {
+            name: view.name.clone(),
+            filter: view.filter_expr.as_ref().or(spec.filter_expr.as_ref()),
+            columns: view.columns.as_deref().unwrap_or(&spec.columns),
+            sort_expr: view.sort_expr.as_ref().or(spec.sort_expr.as_ref()),
+            sort_descending: if view.sort.is_some() {
+                view.sort_descending
             } else {
-                ord
-            }
-        });
-    }
-    let matched = rows.len();
-    if let Some(limit) = spec.limit {
-        rows.truncate(limit);
-    }
-
-    Ok(BaseView {
-        labels: spec.columns.iter().map(|c| c.label.clone()).collect(),
-        rows: rows.into_iter().map(|(row, _)| row).collect(),
-        matched,
-        scanned,
-        warnings,
-    })
+                spec.sort_descending
+            },
+            limit: view.limit.or(spec.limit),
+        })
+        .collect()
 }
 
 fn source_matches(source: &BaseSource, entry: &crate::storage::IndexEntry) -> bool {
@@ -436,9 +618,15 @@ pub fn read_base_file(records_root: &Path, relative: &str) -> Result<String, Err
 
 /// Validate and render a `.base` file without changing it.
 pub fn render_base_file(records_root: &Path, relative: &str) -> Result<BaseView, Error> {
+    let mut views = render_base_file_views(records_root, relative)?;
+    Ok(views.remove(0))
+}
+
+/// Render every named view of a `.base` file.
+pub fn render_base_file_views(records_root: &Path, relative: &str) -> Result<Vec<BaseView>, Error> {
     let source = read_base_file(records_root, relative)?;
     let spec = parse_base(&source).map_err(Error::Invalid)?;
-    render_base(records_root, &spec)
+    render_base_views(records_root, &spec)
 }
 
 /// Validate and atomically save a `.base` file. An invalid query is never
@@ -449,7 +637,7 @@ pub fn save_base_file(
     relative: &str,
     text: &str,
     expected_source: Option<&str>,
-) -> Result<BaseView, Error> {
+) -> Result<Vec<BaseView>, Error> {
     let path = resolve_base_file(records_root, relative)?;
     if let Some(expected) = expected_source {
         let current = std::fs::read_to_string(&path)?;
@@ -459,7 +647,7 @@ pub fn save_base_file(
     }
     let spec = parse_base(text).map_err(Error::Invalid)?;
     write_text(&path, text)?;
-    render_base(records_root, &spec)
+    render_base_views(records_root, &spec)
 }
 
 /// Create a new `.base` file under `Records/base/` and return its entry.
@@ -858,6 +1046,101 @@ mod tests {
         let source = read_base_file(root, &entry.path).unwrap();
         assert!(source.contains("title: \"Books\""));
         parse_base(&source).unwrap();
+    }
+
+    #[test]
+    fn named_views_inherit_source_and_override_fields() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        seed_with_status(root, "rec_a", "Dune", "Reading");
+        seed_with_status(root, "rec_b", "Emma", "Finished");
+        seed_with_status(root, "rec_c", "Ulysses", "Reading");
+
+        let spec = parse_base(
+            "source:\n  type: book\n\
+             columns:\n  - file.name\n\
+             views:\n\
+             \x20 - name: Reading\n    where: status == \"Reading\"\n    columns:\n      - file.name\n      - status\n    sort: \"-title\"\n\
+             \x20 - name: All\n",
+        )
+        .unwrap();
+        let views = render_base_views(root, &spec).unwrap();
+        assert_eq!(views.len(), 2);
+        assert_eq!(views[0].name, "Reading");
+        assert_eq!(views[0].labels, vec!["file.name", "status"]);
+        // Descending title: Ulysses before Dune.
+        assert_eq!(
+            views[0]
+                .rows
+                .iter()
+                .map(|r| r.cells[0].as_str())
+                .collect::<Vec<_>>(),
+            vec!["Ulysses", "Dune"]
+        );
+        assert_eq!(views[0].matched, 2);
+        // The second view inherits the top-level columns and sees every book.
+        assert_eq!(views[1].name, "All");
+        assert_eq!(views[1].labels, vec!["file.name"]);
+        assert_eq!(views[1].rows.len(), 3);
+        assert_eq!(views[1].matched, 3);
+    }
+
+    #[test]
+    fn each_view_has_its_own_limit_and_matched_count() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        seed_with_status(root, "rec_a", "Dune", "Reading");
+        seed_with_status(root, "rec_b", "Emma", "Finished");
+        seed_with_status(root, "rec_c", "Ulysses", "Reading");
+
+        let spec = parse_base(
+            "source:\n  type: book\nlimit: 1\ncolumns:\n  - file.name\n\
+             views:\n  - name: Reading\n    where: status == \"Reading\"\n",
+        )
+        .unwrap();
+        let views = render_base_views(root, &spec).unwrap();
+        assert_eq!(views[0].rows.len(), 1);
+        assert_eq!(views[0].matched, 2);
+    }
+
+    #[test]
+    fn broken_view_declarations_fail_at_parse_time() {
+        assert!(
+            parse_base("views:\n  - name: \"\"\n")
+                .unwrap_err()
+                .contains("name is required")
+        );
+        assert!(
+            parse_base("views:\n  - name: A\n  - name: a\n")
+                .unwrap_err()
+                .contains("duplicate")
+        );
+        assert!(
+            parse_base("views:\n  - name: A\n    type: kanban\n")
+                .unwrap_err()
+                .contains("only table")
+        );
+        assert!(parse_base("views:\n  - name: A\n    columns: []\n").is_err());
+        assert!(parse_base("views:\n  - name: A\n    where: 1 +\n").is_err());
+        assert!(parse_base("views:\n  - name: A\n    limit: 0\n").is_err());
+    }
+
+    #[test]
+    fn a_single_view_keeps_the_old_table_shape() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        seed(root, "rec_1", "book", "Dune", &[]);
+        let spec = parse_base("columns:\n  - file.name\n").unwrap();
+        let view = render_base(root, &spec).unwrap();
+        assert_eq!(view.name, "Table");
+        assert_eq!(view.rows.len(), 1);
+    }
+
+    fn seed_with_status(root: &Path, id: &str, title: &str, status: &str) {
+        let mut record = seed(root, id, "book", title, &[]);
+        record.status = Some(status.to_string());
+        let path = record_path(root, &record);
+        write_record(&path, &record, Some("body")).unwrap();
     }
 
     impl BaseSpec {

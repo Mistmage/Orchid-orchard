@@ -348,6 +348,32 @@ file is still listed with its parse error, so it can be found and repaired
 instead of silently disappearing. Paths are confined to `Records/` and must end
 in `.base`; a command cannot read or overwrite an arbitrary file.
 
+A base can declare several named views over the same source. The top-level
+fields are the defaults; each view inherits everything it does not set:
+
+```yaml
+source:
+  type: book
+where: finished == false
+columns: [title, status]
+views:
+  - name: Reading
+    where: status == "Reading"
+    sort: "-modified"
+  - name: Finished
+    where: status == "Finished"
+    columns: [title, finished]
+    limit: 50
+```
+
+Names are required and unique case-insensitively, `type` may only be `table`
+(the field exists for future list/board renderers), and an invalid formula,
+empty column list or `limit: 0` refuses the save. Inheritance and validation are
+resolved once at parse time; rendering reads each candidate record once and
+evaluates it against every view. Orchard shows one tab per view. `matched`
+counts every record a view accepts before its `limit`; `rows` is the limited
+list, so the header still reports the true size of the result.
+
 `source` filters the index before any file is read. All fields are optional:
 `type` (exact, case-insensitive), `tag`, `folder` (the folder and its
 subfolders) and `path` (a case-insensitive substring of the stored path).
@@ -366,8 +392,9 @@ leaves the old definition in place.
 
 Commands:
 
-- `render_base_cmd({ id })` returns `{ source, view }`, where `view` is
-  `{ labels, rows, matched, scanned, warnings }`.
+- `render_base_cmd({ id })` returns `{ source, view, views }`, where `view` is
+  the first view and `views` every named view; each is
+  `{ name, labels, rows, matched, scanned, warnings }`.
 - `save_base_source_cmd({ id, text, expectedSource })` validates, writes the
   body, and returns the new view. `expectedSource` guards against overwriting a
   definition changed by another program.

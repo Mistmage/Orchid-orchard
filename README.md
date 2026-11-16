@@ -207,6 +207,22 @@ language](docs/orchard-dev.md#formulas). Rendering only reads records; a failed
 cell is shown as a warning instead of hiding the row. Create one with **New
 base** in the header.
 
+A base can also declare several named views over the same source. The top-level
+fields are defaults and each view inherits what it does not set, so a small
+variation stays short:
+
+```yaml
+views:
+  - name: Reading
+    where: status == "Reading"
+  - name: Finished
+    where: status == "Finished"
+    sort: "-completed"
+```
+
+Names must be unique, `type` is `table` for now, and a broken view refuses the
+save instead of rendering as an empty tab. Orchard shows one tab per view.
+
 A base can also be a standalone `.base` file: the same YAML without record
 frontmatter. Drop one under `Records/` and it appears in the **Base files**
 section, or create one with **New .base file**. A `.base` file may set optional

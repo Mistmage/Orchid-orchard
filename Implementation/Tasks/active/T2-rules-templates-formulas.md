@@ -57,6 +57,13 @@ Shipped:
   parses/validates once and renders against the index; it reads other records but
   never writes them. Orchard renders the table, a warnings list and a definition
   editor; `New base` creates one. This is the first Flower.
+- Named views per base: `views` is a list of `{ name, type?, where?, columns?,
+  sort?, limit? }`; a view inherits every field it does not declare. Names are
+  required and unique case-insensitively, `type` is `table` only, and a view
+  definition error refuses the save. `render_base_views` /
+  `render_base_file_views` return one `BaseTable` per view; Tauri returns both
+  `view` (the first) and `views`. `BaseView` carries `name`; a single-view base
+  reports `Table`. Orchard renders a tab per view.
 - First-class `.base` files: the same YAML without record frontmatter, scanned
   under `Records/` rather than indexed as records. `scan_base_files`,
   `render_base_file`, `save_base_file` and `create_base_file` in core back
@@ -71,5 +78,6 @@ Shipped:
 
 Remaining:
 
-- Multiple named views per base and explicit view types (table is the only one).
+- Additional view types beyond `table` (list, board); the schema key exists and
+  unknown types refuse the save.
 - Formula lookups across records (needs an index-aware evaluation context).

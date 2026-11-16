@@ -111,6 +111,43 @@ Sorting is deterministic across types: nulls last, then booleans, numbers,
 strings and lists. Numbers sort numerically (`9` before `10`), which is the bug
 people notice first in a string-sorted table.
 
+## Multiple named views
+
+One base can declare several named views over the same source:
+
+```yaml
+source:
+  type: book
+where: finished == false
+columns: [title, status]
+views:
+  - name: Reading
+    where: status == "Reading"
+    sort: "-modified"
+  - name: Finished
+    where: status == "Finished"
+    columns: [title, finished]
+    limit: 50
+```
+
+A view inherits every field it does not declare, so the top level stays the
+default and each view only states its difference. That keeps small variations
+short instead of making every view repeat the whole query. Inheritance is
+resolved at parse time, once, not per record: a shared `where`, parsed columns
+and parsed sort mean rendering N views still reads each candidate record once
+and evaluates it against every view.
+
+Validation is a definition error, not a warning, because the view set is the
+artifact: names are required and unique case-insensitively, `type` may only be
+`table`, a declared column list may not be empty, and `limit: 0` or an invalid
+formula refuses the save. A view that silently disappeared or rendered nothing
+would be worse than a refusal. View names are also the tab labels, so an
+unlabelled tab is not representable.
+
+Only `table` exists today. The `type` key is declared now so a list or board
+renderer can be added without changing the file shape, and an unknown type is
+rejected instead of being silently drawn as a table.
+
 ## Read-only by construction
 
 `render_base` only reads. There is no action, no write, no network. A base
@@ -121,8 +158,8 @@ query permission, and that is already the same read path the UI uses.
 
 ## Limits
 
-- Only one view per base, always a table. Multiple named views and list/kanban
-  renderers belong in a later revision of the body schema.
+- Named views exist, but only the `table` renderer. List, board and other view
+  types are declared in the schema and rejected until implemented.
 - A `.base` file has no tags, status or folder of its own; put those on a
   `type: base` record if they matter. It is discovered by scanning, not by the
   record index.

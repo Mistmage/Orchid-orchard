@@ -3,8 +3,8 @@ use lilac_core::{
     Record, Wal, BASE_TYPE, apply_rules_reported as apply_rules_core, base_starter_document,
     create_base_file, create_from_template_reported, find_record_by_id, generate_record_id,
     list_templates, move_record_to_folder, normalize_folder, parse_base, parse_rules,
-    preview_rules, read_base_file, read_record, record_path, rebuild_index, render_base,
-    render_base_file, save_as_template, save_base_file, scan_base_files, search_records,
+    preview_rules, read_base_file, read_record, record_path, rebuild_index, render_base_file_views,
+    render_base_views, save_as_template, save_base_file, scan_base_files, search_records,
     write_record,
 };
 use serde::Serialize;
@@ -622,8 +622,9 @@ fn render_base_cmd(id: String) -> Result<String, String> {
     }
     let source = body.unwrap_or_default();
     let spec = parse_base(&source)?;
-    let view = render_base(&root, &spec).map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({ "source": source, "view": view }).to_string())
+    let views = render_base_views(&root, &spec).map_err(|e| e.to_string())?;
+    let view = views.first().cloned().ok_or("base has no view")?;
+    Ok(serde_json::json!({ "source": source, "view": view, "views": views }).to_string())
 }
 
 #[tauri::command]
@@ -649,8 +650,9 @@ fn save_base_source_cmd(
     let spec = parse_base(&text)?;
     record.modified = Some(chrono::Utc::now().to_rfc3339());
     write_record(&path, &record, Some(&text)).map_err(|e| e.to_string())?;
-    let view = render_base(&root, &spec).map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({ "source": text, "view": view }).to_string())
+    let views = render_base_views(&root, &spec).map_err(|e| e.to_string())?;
+    let view = views.first().cloned().ok_or("base has no view")?;
+    Ok(serde_json::json!({ "source": text, "view": view, "views": views }).to_string())
 }
 
 #[tauri::command]
@@ -683,8 +685,9 @@ fn list_base_files_cmd() -> Result<String, String> {
 fn render_base_file_cmd(path: String) -> Result<String, String> {
     let root = records_root();
     let source = read_base_file(&root, &path).map_err(|e| e.to_string())?;
-    let view = render_base_file(&root, &path).map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({ "source": source, "view": view, "path": path }).to_string())
+    let views = render_base_file_views(&root, &path).map_err(|e| e.to_string())?;
+    let view = views.first().cloned().ok_or("base has no view")?;
+    Ok(serde_json::json!({ "source": source, "view": view, "views": views, "path": path }).to_string())
 }
 
 #[tauri::command]
@@ -694,9 +697,10 @@ fn save_base_file_cmd(
     expected_source: Option<String>,
 ) -> Result<String, String> {
     let root = records_root();
-    let view = save_base_file(&root, &path, &text, expected_source.as_deref())
+    let views = save_base_file(&root, &path, &text, expected_source.as_deref())
         .map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({ "source": text, "view": view, "path": path }).to_string())
+    let view = views.first().cloned().ok_or("base has no view")?;
+    Ok(serde_json::json!({ "source": text, "view": view, "views": views, "path": path }).to_string())
 }
 
 #[tauri::command]

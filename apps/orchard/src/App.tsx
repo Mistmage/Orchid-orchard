@@ -252,6 +252,7 @@ interface AppliedRules {
 }
 
 interface BaseViewData {
+  name: string;
   labels: string[];
   rows: { id: string; title: string | null; path: string; cells: string[] }[];
   matched: number;
@@ -262,6 +263,7 @@ interface BaseViewData {
 interface BaseRender {
   source: string;
   view: BaseViewData;
+  views: BaseViewData[];
 }
 
 interface BaseFileInfo {
@@ -476,6 +478,27 @@ function BaseTableView(props: { view: BaseViewData }) {
   );
 }
 
+function BaseTableSet(props: { views: BaseViewData[] }) {
+  const [selected, setSelected] = createSignal(0);
+  const current = () => props.views[Math.min(selected(), props.views.length - 1)] ?? props.views[0];
+  return (
+    <>
+      <Show when={props.views.length > 1}>
+        <div class="row base-view-tabs">
+          <For each={props.views}>
+            {(v, i) => (
+              <button class={"tab " + (i() === selected() ? "active" : "")} onClick={() => setSelected(i())}>
+                {v.name}
+              </button>
+            )}
+          </For>
+        </div>
+      </Show>
+      <Show when={current()}>{(v) => <BaseTableView view={v()} />}</Show>
+    </>
+  );
+}
+
 function BlockNode(props: { b: Block; recordId: string; path: number[]; depth: number; indent: boolean; onSaved: (view: BlockSessionView) => void; onError: (message: string) => void; onInsertAfter: (path: number[]) => void; onDelete: (path: number[], content: string) => void }) {
   const section = isSectionKind(props.b.kind);
   return (
@@ -615,13 +638,13 @@ export default function App() {
   const [newBaseTitle, setNewBaseTitle] = createSignal("");
   const [baseSource, setBaseSource] = createSignal("");
   const [baseLoadedSource, setBaseLoadedSource] = createSignal("");
-  const [baseView, setBaseView] = createSignal<BaseViewData | null>(null);
+  const [baseViews, setBaseViews] = createSignal<BaseViewData[]>([]);
   const [baseNotice, setBaseNotice] = createSignal("");
   const [baseFiles, setBaseFiles] = createSignal<BaseFileInfo[]>([]);
   const [expandedBaseFile, setExpandedBaseFile] = createSignal<string | null>(null);
   const [fileBaseSource, setFileBaseSource] = createSignal("");
   const [fileBaseLoadedSource, setFileBaseLoadedSource] = createSignal("");
-  const [fileBaseView, setFileBaseView] = createSignal<BaseViewData | null>(null);
+  const [fileBaseViews, setFileBaseViews] = createSignal<BaseViewData[]>([]);
   const [fileBaseNotice, setFileBaseNotice] = createSignal("");
   const [newBaseFileTitle, setNewBaseFileTitle] = createSignal("");
   const [previewTitle, setPreviewTitle] = createSignal("Example page - GitHub");
@@ -931,7 +954,7 @@ export default function App() {
         const result = JSON.parse(json as string) as BaseRender;
         setBaseSource(result.source);
         setBaseLoadedSource(result.source);
-        setBaseView(result.view);
+        setBaseViews(result.views ?? [result.view]);
       })
       .catch((e) => setBaseNotice("Could not render base: " + String(e)));
   }
@@ -946,7 +969,7 @@ export default function App() {
       const result = JSON.parse(json) as BaseRender;
       setBaseSource(result.source);
       setBaseLoadedSource(result.source);
-      setBaseView(result.view);
+      setBaseViews(result.views ?? [result.view]);
       setBaseNotice("Saved and rendered.");
       await load();
     } catch (e) {
@@ -971,12 +994,12 @@ export default function App() {
 
   function openFileBase(path: string) {
     setFileBaseNotice("");
-    setFileBaseView(null);
+    setFileBaseViews([]);
     renderBaseFile(path)
       .then((result) => {
         setFileBaseSource(result.source);
         setFileBaseLoadedSource(result.source);
-        setFileBaseView(result.view);
+        setFileBaseViews(result.views ?? [result.view]);
       })
       .catch((e) => setFileBaseNotice("Could not render base file: " + String(e)));
   }
@@ -997,7 +1020,7 @@ export default function App() {
       const result = await saveBaseFile(path, fileBaseSource(), fileBaseLoadedSource());
       setFileBaseSource(result.source);
       setFileBaseLoadedSource(result.source);
-      setFileBaseView(result.view);
+      setFileBaseViews(result.views ?? [result.view]);
       setFileBaseNotice("Saved and rendered.");
       await loadBaseFiles();
     } catch (e) {
@@ -1696,8 +1719,8 @@ then move "Cooking"`}</pre>
                           </span>
                         </Show>
                       </div>
-                      <Show when={baseView()} fallback={<div class="hint">Loading the base…</div>}>
-                        {(v) => <BaseTableView view={v()} />}
+                      <Show when={baseViews().length > 0} fallback={<div class="hint">Loading the base…</div>}>
+                        <BaseTableSet views={baseViews()} />
                       </Show>
                       <details class="meta-editor" open>
                         <summary>Definition (YAML body)</summary>
@@ -1889,8 +1912,8 @@ then move "Cooking"`}</pre>
                         <span class="hint status-ok">{fileBaseNotice()}</span>
                       </Show>
                     </div>
-                    <Show when={fileBaseView()} fallback={<div class="hint">Loading the base…</div>}>
-                      {(v) => <BaseTableView view={v()} />}
+                    <Show when={fileBaseViews().length > 0} fallback={<div class="hint">Loading the base…</div>}>
+                      <BaseTableSet views={fileBaseViews()} />
                     </Show>
                     <details class="meta-editor" open>
                       <summary>Definition (YAML)</summary>
