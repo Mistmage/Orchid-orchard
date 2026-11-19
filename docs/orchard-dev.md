@@ -205,7 +205,7 @@ The set records `saved_from`, an ordered `tab_groups` list
 `window_hint` with tab counts and, for a window capture, outer bounds and state.
 The index derives `group_name` and `group_color` from `tab_group` (open
 metadata, read defensively) or the first `tab_groups` entry, and passes
-`item_count`, `saved_from`, `group_name` and `group_color` through
+`item_count`, `saved_from`, `group_name`, `group_color` and `geometry` through
 `search_records`, which is what the popup list renders.
 
 Reopening accepts `{ id, mode, groupId }` with `mode` one of:
@@ -219,6 +219,34 @@ Reopening accepts `{ id, mode, groupId }` with `mode` one of:
 A browser without tab groups still opens the tabs and reports that the groups
 could not be made. `rebuildGroups` returns `{ grouped, warning }`, and the popup
 shows the warning instead of claiming success.
+
+### Workspaces
+
+A workspace is the named form of a window capture: the same ordered `items` and
+`tab_groups`, plus `geometry`, a description and a stable record that can be
+updated in place. The popup's **Workspaces** tab saves the current window under
+a name, lists saved workspaces, and can replace one with the current window
+(Update). Updating reuses the page record of a tab whose URL is already in the
+workspace instead of saving a duplicate page.
+
+Geometry is a hint with rules in Rust (`crates/lilac-core/src/workspace.rs`),
+not in the extension:
+
+- `describe_display` picks the display a window overlaps most and returns its
+  work area and scale. The record stores that description, never a display id.
+- `place_window` picks the display the captured bounds overlap most, shrinks a
+  window larger than the display, moves a partly off-screen window into view,
+  and centres a window that touches no display. It reports `{ clamped, reason }`.
+- The extension calls both over the native host. Without `system.display` (or on
+  a browser that does not expose displays), reopening applies the raw bounds and
+  says so; a refused position is retried without bounds.
+
+Reopening a workspace defaults to `window`; `group` and `into` behave as they do
+for collections, so a workspace can also become a group. Position and size are
+applied when the window is created, groups and the active tab are restored, and
+`maximized`/`fullscreen` is applied last so the window does not jump while it is
+being filled. `minimized` is not restored. Warnings are joined into one message
+so the popup can show a partly restored open.
 
 ## Templates
 

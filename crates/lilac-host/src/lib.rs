@@ -266,6 +266,33 @@ fn dispatch(records_root: &std::path::Path, method: &str, params: Value) -> Resu
             let opened = touch_opened(&path).map_err(|e| e.to_string())?;
             Ok(json!({ "id": id, "opened": opened }))
         }
+        "describe_display" => {
+            // Capture is a browser concern; deciding which display a window
+            // was on is geometry logic, so it lives with the other geometry
+            // rules in the core.
+            let geometry: lilac_core::WindowGeometry =
+                serde_json::from_value(params.get("geometry").cloned().ok_or("missing geometry")?)
+                    .map_err(|e| e.to_string())?;
+            let displays: Vec<lilac_core::DisplayInfo> =
+                serde_json::from_value(params.get("displays").cloned().unwrap_or(json!([])))
+                    .map_err(|e| e.to_string())?;
+            let described = lilac_core::describe_display(&geometry, &displays);
+            Ok(json!({ "geometry": described }))
+        }
+        "place_window" => {
+            // Bounds are hints: the caller still opens the window if this
+            // returns nothing, and reports that geometry was not applied.
+            let geometry: lilac_core::WindowGeometry =
+                serde_json::from_value(params.get("geometry").cloned().ok_or("missing geometry")?)
+                    .map_err(|e| e.to_string())?;
+            let displays: Vec<lilac_core::DisplayInfo> =
+                serde_json::from_value(params.get("displays").cloned().unwrap_or(json!([])))
+                    .map_err(|e| e.to_string())?;
+            match lilac_core::place_window(&geometry, &displays) {
+                Some(placement) => Ok(json!({ "placement": placement })),
+                None => Ok(json!({ "placement": null })),
+            }
+        }
         "search_records" => {
             let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
             let idx = rebuild_index(records_root).map_err(|e| e.to_string())?;
@@ -512,8 +539,18 @@ fn apply_patch(rec: &mut Record, patch: &Value) {
             .filter_map(|x| x.as_str().map(|s| s.to_string()))
             .collect();
     }
-    if let Some(v) = patch.get("description").and_then(|x| x.as_str()) {
-        rec.description = Some(v.to_string());
+    if let Some(v) = patch.get("description") {
+        // An explicit null or empty string clears the description; a missing
+        // key leaves it alone, like every other field.
+        if v.is_null() {
+            rec.description = None;
+        } else if let Some(text) = v.as_str() {
+            rec.description = if text.trim().is_empty() {
+                None
+            } else {
+                Some(text.to_string())
+            };
+        }
     }
     if let Some(v) = patch.get("folder").and_then(|x| x.as_str()) {
         if v.trim().is_empty() {
@@ -522,12 +559,51 @@ fn apply_patch(rec: &mut Record, patch: &Value) {
             rec.folder = Some(v.trim().to_string());
         }
     }
+    if let Some(v) = patch.get("saved_from") {
+        rec.saved_from = v
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+    }
+    // Typed list fields are replaced as a whole; a malformed patch leaves the
+    // record untouched rather than silently emptying it.
+    if let Some(v) = patch.get("items") {
+        if v.is_null() {
+            rec.items.clear();
+        } else if let Ok(items) = serde_json::from_value(v.clone()) {
+            rec.items = items;
+        }
+    }
+    if let Some(v) = patch.get("tab_groups") {
+        if v.is_null() {
+            rec.tab_groups.clear();
+        } else if let Ok(groups) = serde_json::from_value(v.clone()) {
+            rec.tab_groups = groups;
+        }
+    }
+    if let Some(v) = patch.get("geometry") {
+        rec.geometry = if v.is_null() {
+            None
+        } else {
+            serde_json::from_value(v.clone()).ok()
+        };
+    }
     // open metadata: merge remaining keys into extra
     if let Some(obj) = patch.as_object() {
         for (k, v) in obj {
             if !matches!(
                 k.as_str(),
-                "title" | "status" | "url" | "tags" | "description" | "folder"
+                "title"
+                    | "status"
+                    | "url"
+                    | "tags"
+                    | "description"
+                    | "folder"
+                    | "saved_from"
+                    | "items"
+                    | "tab_groups"
+                    | "geometry"
             ) {
                 // try to convert to yaml value via json->yaml roundtrip
                 if let Ok(yv) = serde_yaml::to_value(v) {
@@ -560,6 +636,7 @@ fn idx_records_to_json(idx: &lilac_core::Index) -> Value {
                 "saved_from": e.saved_from,
                 "group_name": e.group_name,
                 "group_color": e.group_color,
+                "geometry": e.geometry,
             })
         })
         .collect();
@@ -692,5 +769,67 @@ mod tests {
         assert!(!text.contains("window_id"));
         assert!(!text.contains("tab_id"));
         assert!(!text.contains("groupId"));
+    }
+
+    #[test]
+    fn workspace_geometry_is_described_and_clamped_by_the_host() {
+        test_config();
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let displays = json!([
+            {
+                "bounds": { "left": 0.0, "top": 0.0, "width": 1920.0, "height": 1080.0 },
+                "work_area": { "left": 0.0, "top": 0.0, "width": 1920.0, "height": 1040.0 },
+                "scale": 1.0,
+                "primary": true
+            },
+            {
+                "bounds": { "left": 1920.0, "top": 0.0, "width": 2560.0, "height": 1440.0 },
+                "scale": 1.5,
+                "primary": false
+            }
+        ]);
+
+        // Capture asks the host which display the window was on, so the answer
+        // does not depend on the extension knowing about monitors.
+        let described = call(
+            root,
+            "describe_display",
+            json!({
+                "geometry": { "left": 2000.0, "top": 100.0, "width": 1200.0, "height": 800.0 },
+                "displays": displays
+            }),
+        );
+        let geometry = &described["result"]["geometry"];
+        assert_eq!(geometry["display"]["left"].as_f64(), Some(1920.0));
+        assert_eq!(geometry["display_scale"].as_f64(), Some(1.5));
+
+        // Reopening on a smaller set of displays clamps an off-screen window.
+        let placed = call(
+            root,
+            "place_window",
+            json!({
+                "geometry": { "left": 5000.0, "top": 5000.0, "width": 800.0, "height": 600.0 },
+                "displays": [{
+                    "bounds": { "left": 0.0, "top": 0.0, "width": 1280.0, "height": 720.0 },
+                    "primary": true
+                }]
+            }),
+        );
+        let placement = &placed["result"]["placement"];
+        assert_eq!(placement["clamped"].as_bool(), Some(true));
+        assert_eq!(placement["left"].as_f64(), Some(240.0));
+        assert_eq!(placement["top"].as_f64(), Some(60.0));
+
+        // Partial bounds have nothing to place; the caller still opens the set.
+        let partial = call(
+            root,
+            "place_window",
+            json!({
+                "geometry": { "left": 10.0, "top": 20.0 },
+                "displays": displays
+            }),
+        );
+        assert!(partial["result"]["placement"].is_null());
     }
 }

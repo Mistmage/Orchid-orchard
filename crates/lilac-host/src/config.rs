@@ -13,6 +13,7 @@ pub const DEFAULT_REGISTERED_FOLDERS: &[&str] = &[
     "snapshot",
     "note",
     "snippet",
+    "workspace",
 ];
 
 pub fn default_registered_folders() -> Vec<String> {

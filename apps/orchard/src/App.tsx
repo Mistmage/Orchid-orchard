@@ -25,6 +25,17 @@ interface RecordItem {
   opened: string | null;
   item_count: number;
   saved_from: string | null;
+  geometry?: WindowGeometry | null;
+}
+
+interface WindowGeometry {
+  left?: number | null;
+  top?: number | null;
+  width?: number | null;
+  height?: number | null;
+  state?: string | null;
+  display_scale?: number | null;
+  display?: { left: number; top: number; width: number; height: number } | null;
 }
 
 interface CollectionEntry {
@@ -34,6 +45,14 @@ interface CollectionEntry {
   group: string | null;
   group_color: string | null;
   pinned: boolean;
+}
+
+/// A collection and a workspace are both ordered tab sets: they share the
+/// entry-list view and differ in what else they capture. Geometry makes a
+/// workspace a named window rather than a plain set.
+function isTabSet(r: { type: string }) {
+  const t = r.type.toLowerCase();
+  return t === "collection" || t === "workspace";
 }
 
 interface Settings {
@@ -1089,12 +1108,12 @@ export default function App() {
       openBase(id);
       return;
     }
-    if (card && card.type.toLowerCase() === "collection") {
+    if (card && isTabSet(card)) {
       setBlocks([]);
       try {
         setCollectionEntries(await fetchCollectionItems(id));
       } catch (e) {
-        setCollectionNotice("Could not read collection items: " + String(e));
+        setCollectionNotice("Could not read tab set items: " + String(e));
       }
       return;
     }
@@ -1709,7 +1728,7 @@ then move "Cooking"`}</pre>
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); moveSelected(); } }}
             />
             <datalist id="folder-choices">
-              <For each={settings()?.registered_folders || ["page", "collection", "bookmark", "snapshot", "note", "snippet"]}>
+              <For each={settings()?.registered_folders || ["page", "collection", "bookmark", "snapshot", "note", "snippet", "workspace"]}>
                 {(f) => <option value={f} />}
               </For>
             </datalist>
@@ -1783,17 +1802,26 @@ then move "Cooking"`}</pre>
                     </div>
                   }
                 >
-                <Show when={r.type.toLowerCase() === "collection"}>
+                <Show when={isTabSet(r)}>
                   <div class="collection-view" style={{ "margin-top": "8px" }} onClick={(e) => e.stopPropagation()}>
                     <div class="row">
                       <b>{r.item_count} item{r.item_count === 1 ? "" : "s"}</b>
                       <Show when={r.saved_from}>
                         <span class="group-badge">saved from {r.saved_from}</span>
                       </Show>
+                      <Show when={r.geometry && r.geometry.width && r.geometry.height}>
+                        <span class="group-badge">
+                          {Math.round(r.geometry!.width!)}×{Math.round(r.geometry!.height!)}
+                          <Show when={r.geometry!.left != null && r.geometry!.top != null}>
+                            {" at " + Math.round(r.geometry!.left!) + "," + Math.round(r.geometry!.top!)}
+                          </Show>
+                          <Show when={r.geometry!.state}>{" · " + r.geometry!.state}</Show>
+                        </span>
+                      </Show>
                       <span class="hint">Structured items from the frontmatter; the Markdown body mirrors them.</span>
                       <Show when={collectionNotice()}><span class="error">{collectionNotice()}</span></Show>
                     </div>
-                    <Show when={collectionEntries().length > 0} fallback={<div class="hint">No items in this collection yet.</div>}>
+                    <Show when={collectionEntries().length > 0} fallback={<div class="hint">No items in this tab set yet.</div>}>
                       <ol class="collection-items">
                         <For each={collectionEntries()}>
                           {(entry, i) => (

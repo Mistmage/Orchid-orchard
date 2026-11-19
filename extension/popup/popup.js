@@ -86,6 +86,7 @@ async function openEditor(id) {
       <button id="e-autoname" style="margin:4px 0;">Auto-name</button><br>
       <label>Tags (comma)<br><input id="e-tags" value="${escape(tags)}" style="width:100%" /></label><br>
       <label>Status<br><input id="e-status" value="${escape(r.status || "")}" style="width:100%" /></label><br>
+      <label>Description<br><input id="e-description" value="${escape(r.description || "")}" style="width:100%" /></label><br>
       <label>Folder (relative to Records/)<br><input id="e-folder" value="${escape(r.folder || "")}" style="width:100%" /></label><br>
       <label>Notes<br><textarea id="e-body" style="width:100%; height:80px;">${escape(body)}</textarea></label><br>
       <div class="row">
@@ -131,6 +132,7 @@ async function openEditor(id) {
       title: $("#e-title").value,
       tags: $("#e-tags").value.split(",").map((s) => s.trim()).filter(Boolean),
       status: $("#e-status").value || null,
+      description: $("#e-description").value || null,
       folder: $("#e-folder").value || null,
     };
     const newBody = $("#e-body").value;
@@ -220,6 +222,129 @@ async function renderCollections() {
       await call("deleteRecord", { id: btn.dataset.del });
       setStatus("Deleted");
       render();
+    });
+  });
+}
+
+function geometryText(g) {
+  if (!g || typeof g.width !== "number" || typeof g.height !== "number") return "";
+  const size = Math.round(g.width) + "×" + Math.round(g.height);
+  const at = typeof g.left === "number" && typeof g.top === "number"
+    ? " at " + Math.round(g.left) + "," + Math.round(g.top)
+    : "";
+  const state = g.state ? " · " + g.state : "";
+  return size + at + state;
+}
+
+async function fetchLiveGroups() {
+  const resp = await call("listTabGroups");
+  return (resp && resp.ok && resp.result && resp.result.groups) || [];
+}
+
+async function renderWorkspaces() {
+  list.innerHTML = "Loading...";
+  const all = await fetchRecent();
+  const items = all.filter((x) => x.type === "workspace");
+  list.innerHTML = `
+    <div class="item">
+      <div class="title">Save this window as a workspace</div>
+      <label>Name<br><input id="w-title" placeholder="e.g. Design desk" style="width:100%" /></label>
+      <label>Description<br><input id="w-desc" placeholder="What this arrangement is for" style="width:100%" /></label>
+      <div class="row"><button id="w-save">Save current window</button></div>
+      <div class="url">Tabs, groups and window bounds are captured. Reopening clamps the bounds to a display that exists now.</div>
+    </div>
+    ${items.map((r) => {
+      const count = r.item_count || 0;
+      const geometry = geometryText(r.geometry);
+      return `
+      <div class="item">
+        <div class="title">${escape(r.title || r.id)}</div>
+        <div class="url">${count} tab${count === 1 ? "" : "s"}${geometry ? " · " + escape(geometry) : ""} · ${escape(r.id)}</div>
+        <div class="row">
+          <select data-wmode="${escape(r.id)}" title="How to reopen this workspace">
+            <option value="window">New window</option>
+            <option value="group">New group</option>
+            <option value="into">Into group…</option>
+          </select>
+          <select data-wtarget="${escape(r.id)}" style="display:none" title="Target group"></select>
+          <button data-wopen="${escape(r.id)}">Open</button>
+          <button data-wupdate="${escape(r.id)}" title="Replace this workspace with the current window">Update</button>
+          <button data-wedit="${escape(r.id)}">Edit</button>
+          <button data-wdel="${escape(r.id)}">Delete</button>
+        </div>
+      </div>`;
+    }).join("")}
+  `;
+  const saveBtn = $("#w-save");
+  if (saveBtn) saveBtn.addEventListener("click", async () => {
+    const title = $("#w-title").value.trim();
+    const description = $("#w-desc").value.trim();
+    setStatus("Saving workspace...");
+    const resp = await call("saveWorkspace", { title, description });
+    if (!resp || !resp.ok) { setStatus("Error: " + (resp && resp.error)); return; }
+    const res = resp.result || {};
+    setStatus("Saved " + (res.count || 0) + " tabs as a workspace");
+    renderWorkspaces();
+  });
+  // Live groups fill the "into" picker; the ids never leave this page.
+  list.querySelectorAll("select[data-wmode]").forEach((select) => {
+    const id = select.dataset.wmode;
+    const target = list.querySelector(`select[data-wtarget="${id}"]`);
+    select.addEventListener("change", async () => {
+      if (select.value !== "into") { target.style.display = "none"; return; }
+      const groups = await fetchLiveGroups();
+      if (!groups.length) {
+        setStatus("No open tab groups to add to");
+        select.value = "window";
+        target.style.display = "none";
+        return;
+      }
+      target.innerHTML = groups.map((g) => {
+        const title = g.title || "(untitled)";
+        return `<option value="${escape(g.id)}">${escape(title)} · ${escape(g.color)} · ${g.tab_count} tab${g.tab_count === 1 ? "" : "s"}</option>`;
+      }).join("");
+      target.style.display = "";
+    });
+  });
+  list.querySelectorAll("[data-wopen]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.wopen;
+      const modeSelect = list.querySelector(`select[data-wmode="${id}"]`);
+      const targetSelect = list.querySelector(`select[data-wtarget="${id}"]`);
+      const mode = modeSelect ? modeSelect.value : "window";
+      const groupId = mode === "into" && targetSelect && targetSelect.value
+        ? Number(targetSelect.value)
+        : null;
+      setStatus("Opening...");
+      const res = await call("reopenWorkspace", { id, mode, groupId });
+      if (!res || !res.ok) { setStatus("Error: " + (res && res.error)); return; }
+      const opened = (res.count || 0) + " tab" + ((res.count || 0) === 1 ? "" : "s");
+      setStatus(res.warning ? "Opened " + opened + " — " + res.warning : "Opened " + opened);
+    });
+  });
+  list.querySelectorAll("[data-wupdate]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.wupdate;
+      if (!confirm("Update this workspace from the current window?")) return;
+      setStatus("Updating workspace...");
+      const resp = await call("saveWorkspace", { id });
+      if (!resp || !resp.ok) { setStatus("Error: " + (resp && resp.error)); return; }
+      const res = resp.result || {};
+      setStatus("Updated " + (res.count || 0) + " tabs");
+      renderWorkspaces();
+    });
+  });
+  list.querySelectorAll("[data-wedit]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await openEditor(btn.dataset.wedit);
+    });
+  });
+  list.querySelectorAll("[data-wdel]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Delete this workspace?")) return;
+      await call("deleteRecord", { id: btn.dataset.wdel });
+      setStatus("Deleted");
+      renderWorkspaces();
     });
   });
 }
@@ -351,6 +476,7 @@ async function render() {
   searchbar.style.display = (currentView === "search") ? "block" : "none";
   if (currentView === "recent") await renderRecent();
   else if (currentView === "collections") await renderCollections();
+  else if (currentView === "workspaces") await renderWorkspaces();
   else if (currentView === "tags") await renderTags();
   else if (currentView === "search") await renderSearch();
   else if (currentView === "settings") await renderSettings();

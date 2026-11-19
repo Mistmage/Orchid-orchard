@@ -88,6 +88,7 @@ struct RecordView {
     opened: Option<String>,
     item_count: usize,
     saved_from: Option<String>,
+    geometry: Option<lilac_core::WindowGeometry>,
 }
 
 impl From<Record> for RecordView {
@@ -105,6 +106,7 @@ impl From<Record> for RecordView {
             opened: r.opened,
             item_count: r.items.len(),
             saved_from: r.saved_from,
+            geometry: r.geometry,
         }
     }
 }
@@ -162,6 +164,7 @@ fn list_records() -> Result<Vec<RecordView>, String> {
         opened: e.opened,
         item_count: e.item_count,
         saved_from: e.saved_from,
+        geometry: e.geometry,
     }).collect())
 }
 
@@ -182,6 +185,7 @@ fn search(query: String) -> Result<Vec<RecordView>, String> {
         opened: e.opened,
         item_count: e.item_count,
         saved_from: e.saved_from,
+        geometry: e.geometry,
     }).collect())
 }
 

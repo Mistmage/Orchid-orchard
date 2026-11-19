@@ -153,22 +153,47 @@ async function tabGroupsFor(tabs) {
   return { groups, byId };
 }
 
-/// Save a set of tabs as page records plus one collection. Every scope — a
-/// selection, one group, a whole window — goes through this path so the three
-/// cannot drift into slightly different shapes.
-async function saveTabSet(tabs, options) {
-  const { folder = null, source = "selection", title = null } = options || {};
-  const list = (tabs || []).filter((t) => isWebUrl(t.url));
-  if (!list.length) throw new Error("select at least one http(s) tab first");
-  const ordered = list.slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-  const hints = await tabHints(ordered);
-  const { groups, byId } = await tabGroupsFor(ordered);
+/// A set's body mirrors its entries as links, so the file stays readable.
+function setBody(entries) {
+  return entries.map((entry) => "- [[" + entry.id + "]]").join("\n");
+}
+
+/// Save page records for a set of tabs and return its ordered entries. When
+/// `existing` entries are given (a workspace being updated), a tab whose URL
+/// was already captured reuses that page record instead of creating a second
+/// one; order still follows the live window.
+async function savePagesFor(tabs, folder, existing) {
+  const byUrl = new Map();
+  for (const entry of existing || []) {
+    if (entry && entry.url) byUrl.set(entry.url, entry);
+  }
+  const hints = await tabHints(tabs);
+  const { groups, byId } = await tabGroupsFor(tabs);
   const entries = [];
-  for (const t of ordered) {
+  for (const t of tabs) {
+    const group = byId.get(t.groupId) || null;
+    const prior = byUrl.get(t.url || "");
+    if (prior && prior.id) {
+      const entry = Object.assign({}, prior, {
+        url: t.url || prior.url,
+        title: t.title || prior.title || "",
+        pinned: !!t.pinned,
+        active: !!t.active,
+        muted: !!t.muted,
+      });
+      if (group) {
+        entry.group = group.name;
+        entry.group_color = group.color;
+      } else {
+        delete entry.group;
+        delete entry.group_color;
+      }
+      entries.push(entry);
+      continue;
+    }
     const record = { type: "page", title: t.title || "", url: t.url || "", tags: [] };
     if (folder) record.folder = folder;
     if (hints.has(t.id)) record.window_hint = hints.get(t.id);
-    const group = byId.get(t.groupId) || null;
     if (group) record.tab_group = { title: group.name, color: group.color };
     const saved = await send("save_record", { record, body: "" });
     const entry = {
@@ -185,7 +210,19 @@ async function saveTabSet(tabs, options) {
     }
     entries.push(entry);
   }
-  const body = entries.map((entry) => "- [[" + entry.id + "]]").join("\n");
+  return { entries, groups };
+}
+
+/// Save a set of tabs as page records plus one collection. Every scope — a
+/// selection, one group, a whole window — goes through this path so the three
+/// cannot drift into slightly different shapes.
+async function saveTabSet(tabs, options) {
+  const { folder = null, source = "selection", title = null } = options || {};
+  const list = (tabs || []).filter((t) => isWebUrl(t.url));
+  if (!list.length) throw new Error("select at least one http(s) tab first");
+  const ordered = list.slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  const { entries, groups } = await savePagesFor(ordered, folder);
+  const body = setBody(entries);
   const named = groups.find((g) => g.name);
   const label = title || (named
     ? "Saved tabs — " + named.name
@@ -207,6 +244,88 @@ async function saveTabSet(tabs, options) {
   if (summary) collection.window_hint = summary;
   const saved = await send("save_record", { record: collection, body });
   return { count: entries.length, collection: saved, groups: groups.length };
+}
+
+/// Chrome reports outer bounds for the current window state. Keep only what it
+/// actually gave us instead of writing zeros for missing values.
+function geometryFromWindow(win) {
+  const geometry = {};
+  for (const key of ["left", "top", "width", "height"]) {
+    if (typeof win[key] === "number") geometry[key] = win[key];
+  }
+  if (win.state) geometry.state = win.state;
+  return geometry;
+}
+
+/// Visible displays, in the shape the core's geometry rules expect. A browser
+/// without `system.display` simply reports none, and reopening then applies the
+/// saved bounds without checking them.
+async function displayInfos() {
+  if (!(chrome.system && chrome.system.display && chrome.system.display.getInfo)) return [];
+  try {
+    const infos = await chrome.system.display.getInfo();
+    const rectOf = (r) => (r
+      ? { left: r.left, top: r.top, width: r.width, height: r.height }
+      : null);
+    return (infos || [])
+      .map((d) => ({
+        bounds: rectOf(d.bounds),
+        work_area: rectOf(d.workArea),
+        scale: typeof d.scaleFactor === "number" ? d.scaleFactor : null,
+        primary: !!d.isPrimary,
+      }))
+      .filter((d) => d.bounds);
+  } catch (e) {
+    return [];
+  }
+}
+
+/// Capture the current window as a workspace: its tabs, its groups and the
+/// display it was on. Which display that is and where the window may reopen is
+/// the core's decision, not this file's, so the host describes and clamps it.
+async function captureWindow(windowId, options) {
+  const { folder = null, existing = null } = options || {};
+  const win = await chrome.windows.get(windowId);
+  const all = await chrome.tabs.query({ windowId });
+  const ordered = (all || [])
+    .filter((t) => isWebUrl(t.url))
+    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  if (!ordered.length) throw new Error("this window has no http(s) tabs to save");
+  const { entries, groups } = await savePagesFor(ordered, folder, existing);
+  let geometry = geometryFromWindow(win);
+  const displays = await displayInfos();
+  if (displays.length && geometry.left != null) {
+    try {
+      const res = await send("describe_display", { geometry, displays });
+      if (res && res.geometry) geometry = res.geometry;
+    } catch (e) {}
+  }
+  return {
+    win,
+    entries,
+    groups,
+    geometry,
+    body: setBody(entries),
+    tabCount: ordered.length,
+  };
+}
+
+/// The window state a workspace may ask back. `minimized` is not restored:
+/// opening a workspace into a minimised window would hide the result. Chromium
+/// reports `locked-fullscreen`; plain fullscreen is what can be requested.
+function applyableState(state) {
+  if (state === "maximized" || state === "fullscreen") return state;
+  if (state === "locked-fullscreen") return "fullscreen";
+  return null;
+}
+
+/// Groups captured on a set, with the old single-group field as a fallback.
+function groupHintsOf(rec) {
+  if (rec && Array.isArray(rec.tab_groups) && rec.tab_groups.length) return rec.tab_groups;
+  if (rec && rec.tab_group) {
+    return [{ name: rec.tab_group.title || "", color: rec.tab_group.color || "", collapsed: false }];
+  }
+  return [];
 }
 
 /// Put freshly created tabs back into the groups the set described. Returns
@@ -273,6 +392,143 @@ async function rebuildGroups(tabs, entries, groupHints, mode, targetGroupId) {
         warning: "some groups could not be rebuilt: " + (lastError.message || lastError),
       }
     : { grouped: true, warning: null };
+}
+
+/// Load a set record and resolve its entries to openable URLs. Structured
+/// entries are authoritative; a body without them (older collections) is read
+/// as links and plain URLs, so old files still open.
+async function loadSet(id) {
+  const res = await send("load_record", { id });
+  const rec = res && res.record;
+  if (!rec) throw new Error("record not found: " + id);
+  let entries = Array.isArray(rec.items) ? rec.items.slice() : [];
+  const body = res && res.body;
+  if (!entries.length && body) {
+    for (const line of body.split("\n")) {
+      const m = line.match(/\[\[(.+?)\]\]/);
+      if (m) {
+        try {
+          const r = await send("load_record", { id: m[1] });
+          if (r && r.record) {
+            entries.push({ id: m[1], url: r.record.url || "", title: r.record.title || "" });
+          }
+        } catch (e) {}
+      } else {
+        const u = line.trim().replace(/^[-*]\s*/, "");
+        if (u.startsWith("http")) entries.push({ url: u });
+      }
+    }
+  }
+  // Fill missing URLs from the page records without dropping order.
+  for (const entry of entries) {
+    if (!entry.url && entry.id) {
+      try {
+        const r = await send("load_record", { id: entry.id });
+        if (r && r.record) {
+          entry.url = r.record.url || "";
+          entry.title = entry.title || r.record.title || "";
+        }
+      } catch (e) {}
+    }
+  }
+  return { rec, entries };
+}
+
+/// Open a set's tabs in captured order, then restore groups, focus and window
+/// state. Shared by collections and workspaces so reopening cannot drift.
+async function openTabSet(rec, entries, options) {
+  const { mode = "group", targetGroupId = null, placement = null } = options || {};
+  const opened = entries.filter((entry) => entry.url);
+  if (!opened.length) throw new Error("this set has no openable URLs");
+  const warnings = [];
+  const createdTabs = [];
+  let win = null;
+  if (mode === "window") {
+    // A new window is the honest way to reopen a captured window: its groups
+    // belong to it, not to whatever window the popup was in.
+    const createOptions = { url: opened[0].url, focused: true };
+    if (placement) {
+      createOptions.left = Math.round(placement.left);
+      createOptions.top = Math.round(placement.top);
+      createOptions.width = Math.round(placement.width);
+      createOptions.height = Math.round(placement.height);
+    }
+    try {
+      win = await chrome.windows.create(createOptions);
+    } catch (e) {
+      if (!placement) throw e;
+      // Bounds are a hint: an OS that refuses them must not stop the open.
+      warnings.push("the browser refused the saved bounds; the window opened at the default position");
+      win = await chrome.windows.create({ url: opened[0].url, focused: true });
+    }
+    const first = win && win.tabs && win.tabs[0];
+    if (!first) throw new Error("the browser did not return the new window's tab");
+    if (opened[0].muted) {
+      try { await chrome.tabs.update(first.id, { muted: true }); } catch (e) {}
+    }
+    createdTabs.push(first);
+    for (let i = 1; i < opened.length; i++) {
+      const t = await chrome.tabs.create({
+        windowId: win.id,
+        url: opened[i].url,
+        index: i,
+        active: false,
+        pinned: !!opened[i].pinned,
+        muted: !!opened[i].muted,
+      });
+      createdTabs.push(t);
+    }
+  } else {
+    for (const entry of opened) {
+      const t = await chrome.tabs.create({
+        url: entry.url,
+        active: false,
+        pinned: !!entry.pinned,
+        muted: !!entry.muted,
+      });
+      createdTabs.push(t);
+    }
+  }
+  // Restore focus last, so creating the other tabs does not steal it.
+  const activeIndex = opened.findIndex((entry) => entry.active);
+  if (activeIndex >= 0 && createdTabs[activeIndex]) {
+    try {
+      await chrome.tabs.update(createdTabs[activeIndex].id, { active: true });
+    } catch (e) {}
+  }
+  // Opening the set and its pages is a view, not an edit: touch only `opened`,
+  // and only for records that were actually opened.
+  try { await send("touch_opened", { id: rec.id }); } catch (e) {}
+  for (const entry of opened) {
+    if (entry.id) {
+      try { await send("touch_opened", { id: entry.id }); } catch (e) {}
+    }
+  }
+  const groupResult = await rebuildGroups(
+    createdTabs,
+    opened,
+    groupHintsOf(rec),
+    mode,
+    targetGroupId,
+  );
+  if (groupResult.warning) warnings.push(groupResult.warning);
+  // Apply the window state after the tabs exist, so a maximised window does
+  // not jump while it is being filled.
+  if (win) {
+    const state = applyableState(rec && rec.geometry && rec.geometry.state);
+    if (state) {
+      try {
+        await chrome.windows.update(win.id, { state });
+      } catch (e) {
+        warnings.push("the saved window state could not be restored");
+      }
+    }
+  }
+  return {
+    count: createdTabs.length,
+    grouped: groupResult.grouped,
+    warning: warnings.length ? warnings.join("; ") : null,
+  };
 }
 
 // Public API for popup via runtime messages.
@@ -380,6 +636,73 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const all = await chrome.tabs.query({ windowId: tab.windowId });
         const res = await saveTabSet(all, { folder: msg.folder, source: "window" });
         sendResponse({ ok: true, result: res });
+      } else if (msg.type === "saveWorkspace") {
+        // A workspace is the named form of a window capture: same tabs and
+        // groups, plus geometry and a stable record that can be updated in
+        // place instead of saved again.
+        const active = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = active && active[0];
+        if (!tab) throw new Error("no active window");
+        const previous = msg.id ? await send("load_record", { id: msg.id }) : null;
+        const existing = previous && previous.record;
+        const captured = await captureWindow(tab.windowId, {
+          folder: msg.folder || (existing && existing.folder) || null,
+          existing: existing && Array.isArray(existing.items) ? existing.items : null,
+        });
+        if (existing) {
+          const patch = {
+            items: captured.entries,
+            tab_groups: captured.groups,
+            geometry: captured.geometry,
+            saved_from: "window",
+          };
+          if (typeof msg.title === "string" && msg.title.trim()) {
+            patch.title = msg.title.trim();
+          }
+          if (typeof msg.description === "string") {
+            patch.description = msg.description.trim();
+          }
+          const res = await send("update_record", {
+            id: msg.id,
+            patch,
+            body: captured.body,
+          });
+          sendResponse({
+            ok: true,
+            result: {
+              id: msg.id,
+              count: captured.entries.length,
+              groups: captured.groups.length,
+              updated: true,
+              path: res && res.path,
+            },
+          });
+        } else {
+          const title = (msg.title || "").trim() ||
+            ("Workspace " + new Date().toLocaleString());
+          const record = {
+            type: "workspace",
+            title,
+            tags: [],
+            items: captured.entries,
+            saved_from: "window",
+            geometry: captured.geometry,
+          };
+          if (msg.description && msg.description.trim()) {
+            record.description = msg.description.trim();
+          }
+          if (captured.groups.length) record.tab_groups = captured.groups;
+          if (msg.folder) record.folder = msg.folder;
+          const saved = await send("save_record", { record, body: captured.body });
+          sendResponse({
+            ok: true,
+            result: {
+              id: saved.id,
+              count: captured.entries.length,
+              groups: captured.groups.length,
+            },
+          });
+        }
       } else if (msg.type === "listTabGroups") {
         // Live group handles for the "reopen into a group" picker. They are
         // used in this message only and are never written to a record.
@@ -453,102 +776,73 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         await send("delete_record", { id: msg.id });
         sendResponse({ ok: true });
       } else if (msg.type === "reopenCollection") {
-        const res = await send("load_record", { id: msg.id });
-        const rec = res && res.record;
-        // Structured entries are authoritative; older collections are read from
-        // the body so they still open.
-        let entries = rec && Array.isArray(rec.items) ? rec.items.slice() : [];
-        const body = res && res.body;
-        if (!entries.length && body) {
-          for (const line of body.split("\n")) {
-            const m = line.match(/\[\[(.+?)\]\]/);
-            if (m) {
-              try {
-                const r = await send("load_record", { id: m[1] });
-                if (r && r.record) entries.push({ id: m[1], url: r.record.url || "", title: r.record.title || "" });
-              } catch (e) {}
-            } else {
-              const u = line.trim().replace(/^[-*]\s*/, "");
-              if (u.startsWith("http")) entries.push({ url: u });
+        const { rec, entries } = await loadSet(msg.id);
+        const mode = msg.mode === "window" || msg.mode === "into" ? msg.mode : "group";
+        const targetGroupId = typeof msg.groupId === "number" ? msg.groupId : null;
+        const result = await openTabSet(rec, entries, { mode, targetGroupId });
+        sendResponse({
+          ok: true,
+          count: result.count,
+          mode,
+          grouped: result.grouped,
+          warning: result.warning,
+        });
+      } else if (msg.type === "reopenWorkspace") {
+        const { rec, entries } = await loadSet(msg.id);
+        // A workspace reopens as a window by default: its geometry only means
+        // something for a window, and a named workspace is a window.
+        const mode = msg.mode === "group" || msg.mode === "into" ? msg.mode : "window";
+        const targetGroupId = typeof msg.groupId === "number" ? msg.groupId : null;
+        let placement = null;
+        let geometryWarning = null;
+        if (mode === "window" && rec.geometry) {
+          const displays = await displayInfos();
+          if (!displays.length) {
+            if (
+              typeof rec.geometry.left === "number" &&
+              typeof rec.geometry.top === "number" &&
+              typeof rec.geometry.width === "number" &&
+              typeof rec.geometry.height === "number"
+            ) {
+              placement = rec.geometry;
+              geometryWarning =
+                "display information is unavailable, so the saved bounds were used without checking them";
+            }
+          } else {
+            try {
+              const res = await send("place_window", {
+                geometry: rec.geometry,
+                displays,
+              });
+              if (res && res.placement) {
+                placement = res.placement;
+                if (res.placement.clamped) {
+                  geometryWarning =
+                    "the window was " +
+                    (res.placement.reason || "moved onto a visible display");
+                }
+              }
+            } catch (e) {
+              geometryWarning =
+                "the saved bounds could not be checked: " +
+                (e && e.message ? e.message : e);
             }
           }
         }
-        // Fill missing URLs from the page records without dropping order.
-        for (const entry of entries) {
-          if (!entry.url && entry.id) {
-            try {
-              const r = await send("load_record", { id: entry.id });
-              if (r && r.record) {
-                entry.url = r.record.url || "";
-                entry.title = entry.title || r.record.title || "";
-              }
-            } catch (e) {}
-          }
+        const result = await openTabSet(rec, entries, { mode, targetGroupId, placement });
+        if (mode === "window" && !placement) {
+          geometryWarning = geometryWarning ||
+            (rec.geometry
+              ? "the saved bounds were incomplete, so the window opened at the default position"
+              : "this workspace has no saved bounds, so the window opened at the default position");
         }
-        const opened = entries.filter((entry) => entry.url);
-        if (!opened.length) throw new Error("this collection has no openable URLs");
-        const mode = msg.mode === "window" || msg.mode === "into" ? msg.mode : "group";
-        const targetGroupId = typeof msg.groupId === "number" ? msg.groupId : null;
-        const createdTabs = [];
-        if (mode === "window") {
-          // A new window is the honest way to reopen a captured window: its
-          // groups belong to it, not to whatever window the popup was in.
-          const win = await chrome.windows.create({ url: opened[0].url, focused: true });
-          const first = win && win.tabs && win.tabs[0];
-          if (!first) throw new Error("the browser did not return the new window's tab");
-          createdTabs.push(first);
-          if (opened[0].muted) {
-            try { await chrome.tabs.update(first.id, { muted: true }); } catch (e) {}
-          }
-          for (let i = 1; i < opened.length; i++) {
-            const t = await chrome.tabs.create({
-              windowId: win.id,
-              url: opened[i].url,
-              index: i,
-              active: false,
-              pinned: !!opened[i].pinned,
-              muted: !!opened[i].muted,
-            });
-            createdTabs.push(t);
-          }
-        } else {
-          for (const entry of opened) {
-            const t = await chrome.tabs.create({
-              url: entry.url,
-              active: false,
-              pinned: !!entry.pinned,
-              muted: !!entry.muted,
-            });
-            createdTabs.push(t);
-          }
-        }
-        // Restore focus last, so creating the other tabs does not steal it.
-        const activeIndex = opened.findIndex((entry) => entry.active);
-        if (activeIndex >= 0 && createdTabs[activeIndex]) {
-          try {
-            await chrome.tabs.update(createdTabs[activeIndex].id, { active: true });
-          } catch (e) {}
-        }
-        // Opening the set and its pages is a view, not an edit: touch only
-        // `opened`, and only for records that were actually opened.
-        try { await send("touch_opened", { id: msg.id }); } catch (e) {}
-        for (const entry of opened) {
-          if (entry.id) {
-            try { await send("touch_opened", { id: entry.id }); } catch (e) {}
-          }
-        }
-        const groupHints = (rec && Array.isArray(rec.tab_groups) && rec.tab_groups.length)
-          ? rec.tab_groups
-          : (rec && rec.tab_group
-            ? [{ name: rec.tab_group.title || "", color: rec.tab_group.color || "", collapsed: false }]
-            : []);
-        const groupResult = await rebuildGroups(createdTabs, opened, groupHints, mode, targetGroupId);
         sendResponse({
           ok: true,
-          count: createdTabs.length,
+          count: result.count,
           mode,
-          grouped: groupResult.grouped,
-          warning: groupResult.warning,
+          grouped: result.grouped,
+          warning: [geometryWarning, result.warning].filter(Boolean).join("; ") || null,
+          geometry: { applied: !!placement, warning: geometryWarning },
         });
       } else {
         sendResponse({ ok: false, error: "unknown type" });

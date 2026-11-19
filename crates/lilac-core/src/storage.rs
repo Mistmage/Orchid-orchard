@@ -511,6 +511,10 @@ pub struct IndexEntry {
     pub group_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_color: Option<String>,
+    /// Captured window bounds for a workspace, so lists can describe it without
+    /// reading the file. Hints, not handles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<crate::workspace::WindowGeometry>,
 }
 
 fn is_zero(value: &usize) -> bool {
@@ -591,6 +595,7 @@ pub fn rebuild_index(records_root: &Path) -> Result<Index, Error> {
                 saved_from: rec.saved_from,
                 group_name,
                 group_color,
+                geometry: rec.geometry,
             });
         }
     })?;

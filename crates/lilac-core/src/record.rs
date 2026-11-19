@@ -69,6 +69,9 @@ pub struct Record {
     // group order, names, colours and collapsed state; entries say which tabs
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tab_groups: Vec<crate::collection::GroupHint>,
+    // outer window bounds for a workspace; a hint, never a handle
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<crate::workspace::WindowGeometry>,
 
     // wisteria-compat (reserved, no-op v0.1)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -115,6 +118,7 @@ impl Record {
             items: vec![],
             saved_from: None,
             tab_groups: vec![],
+            geometry: None,
             authority: None,
             lineage: None,
             forked_from: None,

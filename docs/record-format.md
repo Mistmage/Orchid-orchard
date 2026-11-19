@@ -14,7 +14,8 @@ alone.
 │   ├── bookmark/
 │   ├── snapshot/
 │   ├── note/
-│   └── snippet/
+│   ├── snippet/
+│   └── workspace/
 └── Assets/          # referenced by records (snapshots, images); content-addressed preferred
 ```
 
@@ -65,15 +66,20 @@ Research candidate.
 - Placement: `folder` (path relative to `Records/`; omit for the type folder)
 - Template: `target_type` (required when `type: template`; the type it produces)
 - Page: `url`
-- Collection: `items` — an ordered list of
-  `{ id, url, title, group, group_color, pinned }`; the body mirrors it as a
-  Markdown list of `[[id]]` links. The structured list is authoritative and a
-  legacy body without `items` is still parsed. The extension also stores
-  `saved_from` (`selection` or `group`).
+- Collection and workspace entries: `items` — an ordered list of
+  `{ id, url, title, group, group_color, pinned, active, muted }`; the body
+  mirrors it as a Markdown list of `[[id]]` links. The structured list is
+  authoritative and a legacy body without `items` is still parsed.
 - Set source: `saved_from` — `selection`, `group` or `window`.
 - Set groups: `tab_groups` — an ordered list of `{ name, color, collapsed }`,
   mirroring the browser's tab groups at capture time. No group, window or tab id
   is stored.
+- Workspace geometry: `geometry` — outer bounds and the display they belonged to:
+  `{ left, top, width, height, state, display_scale, display: { left, top,
+  width, height } }`. All fields are optional because a browser may report only
+  some. `display` describes the work area rather than storing a display id,
+  which is not stable across sessions. Geometry is a hint: reopening clamps it
+  to a display that exists now and never fails the open because of it.
 - Browser metadata (optional, ephemeral, treated as hints): `open`, `position`,
   `tab_group`, `window_hint`
   - `tab_group`: `{ title, color }` of the browser tab group, if any.
@@ -105,7 +111,7 @@ Property names are implicitly records internally (`status:` ≡ `[[status]]:`). 
 
 ## Record types
 
-`page`, `collection`, `bookmark`, `snapshot`, `note`, `snippet`, `template`. Types are conventions, not hardcoded.
+`page`, `collection`, `bookmark`, `snapshot`, `note`, `snippet`, `workspace`, `template`. Types are conventions, not hardcoded.
 
 A `template` record is a reusable mask: its body and metadata seed a new record
 of the declared `target_type`. Placeholders such as `{{title}}` and `{{host}}`

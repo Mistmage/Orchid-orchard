@@ -14,6 +14,7 @@ pub mod session;
 pub mod storage;
 pub mod template;
 pub mod wal;
+pub mod workspace;
 
 pub use base::{
     BASE_EXTENSION, BASE_TYPE, BaseColumn, BaseFileEntry, BaseRow, BaseSource, BaseSpec, BaseView,
@@ -60,3 +61,6 @@ pub use template::{
     list_templates, save_as_template, substitute as substitute_template,
 };
 pub use wal::{Wal, WalEntry};
+pub use workspace::{
+    DisplayInfo, Placement, Rect, WindowGeometry, describe_display, display_for, place_window,
+};

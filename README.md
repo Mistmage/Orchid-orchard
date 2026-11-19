@@ -223,6 +223,14 @@ pinned state and group names; a tab or group that cannot be recreated is
 reported, not silently dropped. Live browser group ids are used only inside the
 extension and are never written to a record.
 
+A **workspace** is the named form of a window capture: the same tabs and groups,
+plus the window's outer bounds and the display it was on. Saving one under a
+name and then updating it replaces the workspace with the current window instead
+of creating duplicates. Reopening puts the window back at its saved position
+when that display still exists; otherwise the bounds are clamped to a visible
+display, or the workspace opens as a group, and the popup says what changed.
+Geometry is a hint with rules in Rust, and no display id is stored.
+
 ## Bases
 
 A base is a saved query that renders as a table. It is an ordinary record with

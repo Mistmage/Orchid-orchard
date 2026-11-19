@@ -1,7 +1,7 @@
 use lilac_core::{
-    CollectionEntry, GroupHint, Record, delete_record, read_record, read_record_with_mtime,
-    rebuild_index, record_path, render_collection_entries, search_records, write_record,
-    write_record_if_unchanged,
+    CollectionEntry, GroupHint, Record, Rect, WindowGeometry, delete_record, read_record,
+    read_record_with_mtime, rebuild_index, record_path, render_collection_entries, search_records,
+    write_record, write_record_if_unchanged,
 };
 use tempfile::TempDir;
 
@@ -211,6 +211,76 @@ fn captured_window_keeps_groups_but_no_browser_ids() {
     assert_eq!(read.saved_from.as_deref(), Some("window"));
     assert_eq!(read.tab_groups, record.tab_groups);
     assert_eq!(read.items, record.items);
+    assert_eq!(read_body.as_deref(), Some(body.as_str()));
+}
+
+#[test]
+fn workspace_keeps_geometry_and_layout_but_no_browser_ids() {
+    let root = make_root();
+    let mut record = Record::new("rec_ws", "workspace");
+    record.title = Some("Design desk".to_string());
+    record.description = Some("What I keep open while drawing".to_string());
+    record.saved_from = Some("window".to_string());
+    record.geometry = Some(WindowGeometry {
+        left: Some(40.0),
+        top: Some(30.0),
+        width: Some(1440.0),
+        height: Some(900.0),
+        state: Some("maximized".to_string()),
+        display_scale: Some(1.25),
+        display: Some(Rect {
+            left: 0.0,
+            top: 0.0,
+            width: 2560.0,
+            height: 1440.0,
+        }),
+    });
+    record.items = vec![
+        CollectionEntry {
+            id: Some("rec_a".to_string()),
+            url: "https://a.example/one".to_string(),
+            title: Some("A".to_string()),
+            group: Some("Research".to_string()),
+            group_color: Some("blue".to_string()),
+            pinned: false,
+            active: true,
+            muted: false,
+        },
+        CollectionEntry {
+            id: Some("rec_b".to_string()),
+            url: "https://b.example/two".to_string(),
+            title: Some("B".to_string()),
+            group: None,
+            group_color: None,
+            pinned: true,
+            active: false,
+            muted: false,
+        },
+    ];
+    record.tab_groups = vec![GroupHint {
+        name: "Research".to_string(),
+        color: "blue".to_string(),
+        collapsed: false,
+    }];
+
+    let path = record_path(root.path(), &record);
+    let body = render_collection_entries(&record.items);
+    write_record(&path, &record, Some(&body)).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+
+    // Bounds are a description, not a handle: a workspace must stay meaningful
+    // after a browser restart and on another machine.
+    assert!(!text.contains("window_id"));
+    assert!(!text.contains("tab_id"));
+    assert!(!text.contains("display_id"));
+    assert!(!text.contains("groupId"));
+
+    let (read, read_body) = read_record(&path).unwrap();
+    assert_eq!(read.title.as_deref(), Some("Design desk"));
+    assert_eq!(read.geometry, record.geometry);
+    assert_eq!(read.saved_from.as_deref(), Some("window"));
+    assert_eq!(read.items, record.items);
+    assert_eq!(read.tab_groups, record.tab_groups);
     assert_eq!(read_body.as_deref(), Some(body.as_str()));
 }
 
