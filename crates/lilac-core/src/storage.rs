@@ -502,10 +502,54 @@ pub struct IndexEntry {
     /// can show the size without reading the file.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub item_count: usize,
+    /// Where a saved set came from (`selection`, `group`, `window`). A page
+    /// record leaves it empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_from: Option<String>,
+    /// Captured tab group name and colour, for list badges. Hints, not truth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_color: Option<String>,
 }
 
 fn is_zero(value: &usize) -> bool {
     *value == 0
+}
+
+/// `tab_group` is open metadata, so the index reads it defensively instead of
+/// trusting its shape. `tab_groups` is typed and is the fallback for a set
+/// captured with several groups.
+fn tab_group_hint(record: &Record) -> (Option<String>, Option<String>) {
+    let from_value = record.extra.get("tab_group").and_then(|value| match value {
+        serde_yaml::Value::Mapping(map) => {
+            let read = |key: &str| {
+                map.get(serde_yaml::Value::String(key.to_string()))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            };
+            let name = read("title").filter(|s| !s.is_empty());
+            let color = read("color").filter(|s| !s.is_empty());
+            if name.is_some() || color.is_some() {
+                Some((name, color))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    });
+    from_value.unwrap_or_else(|| {
+        record
+            .tab_groups
+            .first()
+            .map(|group| {
+                (
+                    Some(group.name.clone()).filter(|s| !s.is_empty()),
+                    Some(group.color.clone()).filter(|s| !s.is_empty()),
+                )
+            })
+            .unwrap_or((None, None))
+    })
 }
 
 pub fn rebuild_index(records_root: &Path) -> Result<Index, Error> {
@@ -531,6 +575,7 @@ pub fn rebuild_index(records_root: &Path) -> Result<Index, Error> {
                 } else {
                     rec.items.len()
                 };
+            let (group_name, group_color) = tab_group_hint(&rec);
             records.push(IndexEntry {
                 id: rec.id,
                 r#type: rec.r#type,
@@ -543,6 +588,9 @@ pub fn rebuild_index(records_root: &Path) -> Result<Index, Error> {
                 modified: rec.modified,
                 opened: rec.opened,
                 item_count,
+                saved_from: rec.saved_from,
+                group_name,
+                group_color,
             });
         }
     })?;

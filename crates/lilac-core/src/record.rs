@@ -63,6 +63,12 @@ pub struct Record {
     // collection membership (ordered); the body mirrors it as a Markdown list
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<crate::collection::CollectionEntry>,
+    // where a saved set came from: `selection`, `group` or `window`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_from: Option<String>,
+    // group order, names, colours and collapsed state; entries say which tabs
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tab_groups: Vec<crate::collection::GroupHint>,
 
     // wisteria-compat (reserved, no-op v0.1)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -107,6 +113,8 @@ impl Record {
             url: None,
             folder: None,
             items: vec![],
+            saved_from: None,
+            tab_groups: vec![],
             authority: None,
             lineage: None,
             forked_from: None,

@@ -24,6 +24,7 @@ interface RecordItem {
   modified: string | null;
   opened: string | null;
   item_count: number;
+  saved_from: string | null;
 }
 
 interface CollectionEntry {
@@ -1786,6 +1787,9 @@ then move "Cooking"`}</pre>
                   <div class="collection-view" style={{ "margin-top": "8px" }} onClick={(e) => e.stopPropagation()}>
                     <div class="row">
                       <b>{r.item_count} item{r.item_count === 1 ? "" : "s"}</b>
+                      <Show when={r.saved_from}>
+                        <span class="group-badge">saved from {r.saved_from}</span>
+                      </Show>
                       <span class="hint">Structured items from the frontmatter; the Markdown body mirrors them.</span>
                       <Show when={collectionNotice()}><span class="error">{collectionNotice()}</span></Show>
                     </div>

@@ -211,6 +211,18 @@ is still parsed, so collections written by older versions keep working. Orchard
 shows the item count in the list and the entries (with tab group names) in the
 expanded record; the popup shows the count and opens the whole set.
 
+Lilac can save a set from three scopes: the selected tabs, the active tab's
+group, or the whole window. A set records its source (`saved_from`), its groups
+in order (`tab_groups`: name, colour, collapsed) and every tab's group and
+pinned state. A window is saved as one set with group annotations, because it
+reopens as one window.
+
+Reopening offers three forms: a new group in the current window, a new window,
+or into an existing group picked at open time. Opening uses the captured order,
+pinned state and group names; a tab or group that cannot be recreated is
+reported, not silently dropped. Live browser group ids are used only inside the
+extension and are never written to a record.
+
 ## Bases
 
 A base is a saved query that renders as a table. It is an ordinary record with

@@ -18,6 +18,20 @@ pub enum CollectionItem {
     Url(String),
 }
 
+/// A tab group captured with a set. Deliberately contains no browser group id:
+/// the id would be meaningless in another session or browser. Name, colour and
+/// collapsed state are hints used to rebuild the group, and the entry order
+/// decides which tabs belong to it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupHint {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub color: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub collapsed: bool,
+}
+
 /// One member of a collection. `id` is absent only until the page record has
 /// been written (or for a raw URL the user added by hand). Group and pinning
 /// are hints captured at save time; reopening uses them to rebuild the shape.
@@ -35,6 +49,14 @@ pub struct CollectionEntry {
     pub group_color: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pinned: bool,
+    /// The tab the browser had focused when the set was captured. Restored by
+    /// focusing the matching tab after the others are open.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub active: bool,
+    /// Muted state is restorable, unlike `audible`, which is transient and not
+    /// captured: a page can start or stop playing at any time.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub muted: bool,
 }
 
 impl CollectionEntry {
@@ -216,6 +238,8 @@ mod tests {
                 group: Some("Design".into()),
                 group_color: Some("blue".into()),
                 pinned: true,
+                active: false,
+                muted: false,
             },
             CollectionEntry::from_url("https://b.example"),
         ];

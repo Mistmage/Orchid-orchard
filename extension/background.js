@@ -112,10 +112,167 @@ async function windowSummary(windowId, selectedCount) {
   try {
     const win = await chrome.windows.get(windowId);
     const siblings = await chrome.tabs.query({ windowId });
-    return { tab_count: siblings.length, selected_count: selectedCount, incognito: !!win.incognito };
+    const hint = {
+      tab_count: siblings.length,
+      selected_count: selectedCount,
+      incognito: !!win.incognito,
+    };
+    // Geometry is a hint like everything else: an OS may place the window
+    // somewhere else. Workspaces (T13) turn the same values into a name.
+    for (const key of ["left", "top", "width", "height"]) {
+      if (typeof win[key] === "number") hint[key] = win[key];
+    }
+    if (win.state) hint.state = win.state;
+    return hint;
   } catch (e) {
     return { selected_count: selectedCount };
   }
+}
+
+/// Group metadata in the order groups first appear among `tabs`. The browser's
+/// group id lives only inside this function; a record must stay meaningful in
+/// another session, so it stores name, colour and collapsed state instead.
+async function tabGroupsFor(tabs) {
+  const groups = [];
+  const byId = new Map();
+  for (const t of tabs) {
+    const id = t.groupId;
+    if (!id || id === -1 || byId.has(id)) continue;
+    let meta = null;
+    if (chrome.tabGroups && chrome.tabGroups.get) {
+      try { meta = await chrome.tabGroups.get(id); } catch (e) {}
+    }
+    const hint = {
+      name: (meta && meta.title) || "",
+      color: (meta && meta.color) || "",
+      collapsed: !!(meta && meta.collapsed),
+    };
+    byId.set(id, hint);
+    groups.push(hint);
+  }
+  return { groups, byId };
+}
+
+/// Save a set of tabs as page records plus one collection. Every scope — a
+/// selection, one group, a whole window — goes through this path so the three
+/// cannot drift into slightly different shapes.
+async function saveTabSet(tabs, options) {
+  const { folder = null, source = "selection", title = null } = options || {};
+  const list = (tabs || []).filter((t) => isWebUrl(t.url));
+  if (!list.length) throw new Error("select at least one http(s) tab first");
+  const ordered = list.slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  const hints = await tabHints(ordered);
+  const { groups, byId } = await tabGroupsFor(ordered);
+  const entries = [];
+  for (const t of ordered) {
+    const record = { type: "page", title: t.title || "", url: t.url || "", tags: [] };
+    if (folder) record.folder = folder;
+    if (hints.has(t.id)) record.window_hint = hints.get(t.id);
+    const group = byId.get(t.groupId) || null;
+    if (group) record.tab_group = { title: group.name, color: group.color };
+    const saved = await send("save_record", { record, body: "" });
+    const entry = {
+      id: saved.id,
+      url: t.url || "",
+      title: t.title || "",
+      pinned: !!t.pinned,
+      active: !!t.active,
+      muted: !!t.muted,
+    };
+    if (group) {
+      entry.group = group.name;
+      entry.group_color = group.color;
+    }
+    entries.push(entry);
+  }
+  const body = entries.map((entry) => "- [[" + entry.id + "]]").join("\n");
+  const named = groups.find((g) => g.name);
+  const label = title || (named
+    ? "Saved tabs — " + named.name
+    : "Saved tabs " + new Date().toLocaleString());
+  const collection = {
+    type: "collection",
+    title: label,
+    tags: [],
+    items: entries,
+    saved_from: source,
+  };
+  // A single group is also recorded at the set level, which is what older
+  // builds and the plain "open all" path understand.
+  if (groups.length === 1) {
+    collection.tab_group = { title: groups[0].name, color: groups[0].color };
+  }
+  if (groups.length) collection.tab_groups = groups;
+  const summary = await windowSummary(ordered[0].windowId, ordered.length);
+  if (summary) collection.window_hint = summary;
+  const saved = await send("save_record", { record: collection, body });
+  return { count: entries.length, collection: saved, groups: groups.length };
+}
+
+/// Put freshly created tabs back into the groups the set described. Returns
+/// what happened so the popup can report a degraded open instead of silently
+/// pretending the shape was restored.
+async function rebuildGroups(tabs, entries, groupHints, mode, targetGroupId) {
+  if (!tabs.length) return { grouped: false, warning: null };
+  if (!chrome.tabs.group || !chrome.tabGroups || !chrome.tabGroups.update) {
+    return {
+      grouped: false,
+      warning: "this browser does not support tab groups; the tabs were opened ungrouped",
+    };
+  }
+  if (mode === "into") {
+    if (targetGroupId == null) {
+      return { grouped: false, warning: "no target group was chosen; the tabs were opened ungrouped" };
+    }
+    try {
+      await chrome.tabs.group({ tabIds: tabs.map((t) => t.id), groupId: targetGroupId });
+      return { grouped: true, warning: null };
+    } catch (e) {
+      return {
+        grouped: false,
+        warning: "could not add the tabs to the chosen group: " + (e && e.message ? e.message : e),
+      };
+    }
+  }
+  const byName = new Map();
+  entries.forEach((entry, i) => {
+    const name = entry.group || "";
+    if (!name) return;
+    if (!byName.has(name)) {
+      byName.set(name, { color: entry.group_color || "grey", tabs: [] });
+    }
+    byName.get(name).tabs.push(tabs[i]);
+  });
+  // A legacy single-group collection has no per-entry group, only the set's.
+  if (!byName.size && groupHints && groupHints.length && groupHints[0].name) {
+    byName.set(groupHints[0].name, { color: groupHints[0].color || "grey", tabs });
+  }
+  if (!byName.size) return { grouped: false, warning: null };
+  const order = (groupHints || []).map((g) => g.name);
+  const names = [...byName.keys()].sort((a, b) => {
+    const ai = order.indexOf(a);
+    const bi = order.indexOf(b);
+    return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi);
+  });
+  let lastError = null;
+  for (const name of names) {
+    const info = byName.get(name);
+    const hint = (groupHints || []).find((g) => g.name === name);
+    try {
+      const groupId = await chrome.tabs.group({ tabIds: info.tabs.map((t) => t.id) });
+      const update = { title: name, color: info.color || "grey" };
+      if (hint && typeof hint.collapsed === "boolean") update.collapsed = hint.collapsed;
+      await chrome.tabGroups.update(groupId, update);
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  return lastError
+    ? {
+        grouped: true,
+        warning: "some groups could not be rebuilt: " + (lastError.message || lastError),
+      }
+    : { grouped: true, warning: null };
 }
 
 // Public API for popup via runtime messages.
@@ -199,62 +356,52 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         // Only tabs the user actually highlighted. Falling back to the whole
         // window made "save selected" quietly save everything.
         const tabs = await chrome.tabs.query({ highlighted: true, currentWindow: true });
-        const list = (tabs || []).filter((t) => isWebUrl(t.url));
-        if (!list.length) {
-          throw new Error("select at least one http(s) tab first");
+        const res = await saveTabSet(tabs, { folder: msg.folder, source: "selection" });
+        sendResponse({ ok: true, result: res });
+      } else if (msg.type === "saveTabGroup") {
+        // The group the active tab belongs to. Asking for a group while the
+        // active tab is ungrouped is an error, not a silent whole-window save.
+        const active = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = active && active[0];
+        if (!tab) throw new Error("no active tab");
+        if (!tab.groupId || tab.groupId === -1) {
+          throw new Error("the active tab is not in a tab group");
         }
-        const folder = msg.folder || null;
-        const hints = await tabHints(list);
-        // capture shared tab group (if all selected tabs share one group)
-        let sharedGroup = null;
-        const groupIds = new Set(list.map((t) => t.groupId).filter((g) => g && g !== -1));
-        if (groupIds.size === 1 && chrome.tabGroups && chrome.tabGroups.get) {
-          try { sharedGroup = await chrome.tabGroups.get([...groupIds][0]); } catch (e) {}
-        }
-        // Save each tab as a page and keep one structured entry per page, so the
-        // collection can show titles, groups and order without re-reading the
-        // body or guessing from links.
-        const entries = [];
-        for (const t of list) {
-          const record = { type: "page", title: t.title || "", url: t.url || "", tags: [] };
-          if (folder) record.folder = folder;
-          if (hints.has(t.id)) record.window_hint = hints.get(t.id);
-          let group = null;
-          if (t.groupId && t.groupId !== -1 && chrome.tabGroups && chrome.tabGroups.get) {
-            try {
-              const g = await chrome.tabGroups.get(t.groupId);
-              if (g) {
-                group = { title: g.title || "", color: g.color || "" };
-                record.tab_group = group;
-              }
-            } catch (e) {}
+        const inWindow = await chrome.tabs.query({ windowId: tab.windowId });
+        const grouped = inWindow.filter((t) => t.groupId === tab.groupId);
+        const res = await saveTabSet(grouped, { folder: msg.folder, source: "group" });
+        sendResponse({ ok: true, result: res });
+      } else if (msg.type === "saveWindow") {
+        // One window is one set with group annotations, because it reopens as
+        // one window; splitting it into a set per group would lose that.
+        const active = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = active && active[0];
+        if (!tab) throw new Error("no active window");
+        const all = await chrome.tabs.query({ windowId: tab.windowId });
+        const res = await saveTabSet(all, { folder: msg.folder, source: "window" });
+        sendResponse({ ok: true, result: res });
+      } else if (msg.type === "listTabGroups") {
+        // Live group handles for the "reopen into a group" picker. They are
+        // used in this message only and are never written to a record.
+        const groups = [];
+        if (chrome.tabGroups && chrome.tabGroups.query) {
+          const live = await chrome.tabGroups.query({});
+          const tabs = await chrome.tabs.query({});
+          for (const g of live) {
+            groups.push({
+              id: g.id,
+              title: g.title || "",
+              color: g.color || "",
+              collapsed: !!g.collapsed,
+              windowId: g.windowId,
+              tab_count: tabs.filter((t) => t.groupId === g.id).length,
+            });
           }
-          const r = await send("save_record", { record, body: "" });
-          const entry = { id: r.id, url: t.url || "", title: t.title || "", pinned: !!t.pinned };
-          if (group) {
-            entry.group = group.title;
-            entry.group_color = group.color;
-          }
-          entries.push(entry);
         }
-        // The collection is its own record type. Putting it in the page folder
-        // (the usual default) made it appear as a page and buried it.
-        const body = entries.map((entry) => "- [[" + entry.id + "]]").join("\n");
-        const label = sharedGroup && sharedGroup.title
-          ? "Saved tabs — " + sharedGroup.title
-          : "Saved tabs " + new Date().toLocaleString();
-        const col = {
-          type: "collection",
-          title: label,
-          tags: [],
-          items: entries,
-          saved_from: sharedGroup ? "group" : "selection",
-        };
-        if (sharedGroup) col.tab_group = { title: sharedGroup.title || "", color: sharedGroup.color || "" };
-        const summary = await windowSummary(list[0].windowId, list.length);
-        if (summary) col.window_hint = summary;
-        const cres = await send("save_record", { record: col, body });
-        sendResponse({ ok: true, result: { count: list.length, collection: cres } });
+        sendResponse({
+          ok: true,
+          result: { groups, supported: !!(chrome.tabs.group && chrome.tabGroups) },
+        });
       } else if (msg.type === "loadRecord") {
         const res = await send("load_record", { id: msg.id });
         sendResponse({ ok: true, result: res });
@@ -339,10 +486,48 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           }
         }
         const opened = entries.filter((entry) => entry.url);
+        if (!opened.length) throw new Error("this collection has no openable URLs");
+        const mode = msg.mode === "window" || msg.mode === "into" ? msg.mode : "group";
+        const targetGroupId = typeof msg.groupId === "number" ? msg.groupId : null;
         const createdTabs = [];
-        for (const entry of opened) {
-          const t = await chrome.tabs.create({ url: entry.url, active: false, pinned: !!entry.pinned });
-          createdTabs.push(t);
+        if (mode === "window") {
+          // A new window is the honest way to reopen a captured window: its
+          // groups belong to it, not to whatever window the popup was in.
+          const win = await chrome.windows.create({ url: opened[0].url, focused: true });
+          const first = win && win.tabs && win.tabs[0];
+          if (!first) throw new Error("the browser did not return the new window's tab");
+          createdTabs.push(first);
+          if (opened[0].muted) {
+            try { await chrome.tabs.update(first.id, { muted: true }); } catch (e) {}
+          }
+          for (let i = 1; i < opened.length; i++) {
+            const t = await chrome.tabs.create({
+              windowId: win.id,
+              url: opened[i].url,
+              index: i,
+              active: false,
+              pinned: !!opened[i].pinned,
+              muted: !!opened[i].muted,
+            });
+            createdTabs.push(t);
+          }
+        } else {
+          for (const entry of opened) {
+            const t = await chrome.tabs.create({
+              url: entry.url,
+              active: false,
+              pinned: !!entry.pinned,
+              muted: !!entry.muted,
+            });
+            createdTabs.push(t);
+          }
+        }
+        // Restore focus last, so creating the other tabs does not steal it.
+        const activeIndex = opened.findIndex((entry) => entry.active);
+        if (activeIndex >= 0 && createdTabs[activeIndex]) {
+          try {
+            await chrome.tabs.update(createdTabs[activeIndex].id, { active: true });
+          } catch (e) {}
         }
         // Opening the set and its pages is a view, not an edit: touch only
         // `opened`, and only for records that were actually opened.
@@ -352,29 +537,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             try { await send("touch_opened", { id: entry.id }); } catch (e) {}
           }
         }
-        // Rebuild the group shape: one group for the whole set when the
-        // collection captured a shared group, otherwise per entry.
-        const tg = rec && rec.tab_group;
-        if (tg && createdTabs.length && chrome.tabs.group && chrome.tabGroups && chrome.tabGroups.update) {
-          try {
-            const groupId = await chrome.tabs.group({ tabIds: createdTabs.map((t) => t.id) });
-            await chrome.tabGroups.update(groupId, { title: tg.title || "", color: tg.color || "grey" });
-          } catch (e) {}
-        } else if (chrome.tabs.group && chrome.tabGroups && chrome.tabGroups.update) {
-          const byGroup = new Map();
-          opened.forEach((entry, i) => {
-            if (!entry.group) return;
-            if (!byGroup.has(entry.group)) byGroup.set(entry.group, { color: entry.group_color || "grey", tabs: [] });
-            byGroup.get(entry.group).tabs.push(createdTabs[i]);
-          });
-          for (const [title, info] of byGroup) {
-            try {
-              const groupId = await chrome.tabs.group({ tabIds: info.tabs.map((t) => t.id) });
-              await chrome.tabGroups.update(groupId, { title, color: info.color });
-            } catch (e) {}
-          }
-        }
-        sendResponse({ ok: true, count: createdTabs.length });
+        const groupHints = (rec && Array.isArray(rec.tab_groups) && rec.tab_groups.length)
+          ? rec.tab_groups
+          : (rec && rec.tab_group
+            ? [{ name: rec.tab_group.title || "", color: rec.tab_group.color || "", collapsed: false }]
+            : []);
+        const groupResult = await rebuildGroups(createdTabs, opened, groupHints, mode, targetGroupId);
+        sendResponse({
+          ok: true,
+          count: createdTabs.length,
+          mode,
+          grouped: groupResult.grouped,
+          warning: groupResult.warning,
+        });
       } else {
         sendResponse({ ok: false, error: "unknown type" });
       }

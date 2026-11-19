@@ -188,6 +188,38 @@ filled from the referenced page records. Orchard shows the count in the list and
 the ordered entries with group badges in the expanded record; the extension
 shows the count and reopens the set in order, including pinned tabs and groups.
 
+### Capture scopes and reopen forms
+
+Three save scopes share one code path in `extension/background.js`
+(`saveTabSet`), so a selection, a group and a window cannot drift into different
+record shapes:
+
+- **selected tabs** — the highlighted tabs of the current window;
+- **group** — every tab in the active tab's group, and an error when the active
+  tab is ungrouped rather than a silent whole-window save;
+- **window** — every tab in the current window as one set with per-entry group
+  annotations, because it reopens as one window.
+
+The set records `saved_from`, an ordered `tab_groups` list
+(`{ name, color, collapsed }`), per-entry `group`/`group_color`/`pinned`, and a
+`window_hint` with tab counts and, for a window capture, outer bounds and state.
+The index derives `group_name` and `group_color` from `tab_group` (open
+metadata, read defensively) or the first `tab_groups` entry, and passes
+`item_count`, `saved_from`, `group_name` and `group_color` through
+`search_records`, which is what the popup list renders.
+
+Reopening accepts `{ id, mode, groupId }` with `mode` one of:
+
+- `group` (default) — new group(s) in the current window, rebuilt in captured
+  group order;
+- `window` — a new window, with its tabs created in order and then grouped;
+- `into` — every tab added to a group the user picks at open time. Group ids are
+  live handles from `listTabGroups`, used for that call only and never stored.
+
+A browser without tab groups still opens the tabs and reports that the groups
+could not be made. `rebuildGroups` returns `{ grouped, warning }`, and the popup
+shows the warning instead of claiming success.
+
 ## Templates
 
 A template is an ordinary record with `type: template` and a required

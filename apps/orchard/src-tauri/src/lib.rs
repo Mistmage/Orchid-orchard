@@ -87,6 +87,7 @@ struct RecordView {
     modified: Option<String>,
     opened: Option<String>,
     item_count: usize,
+    saved_from: Option<String>,
 }
 
 impl From<Record> for RecordView {
@@ -103,6 +104,7 @@ impl From<Record> for RecordView {
             modified: r.modified,
             opened: r.opened,
             item_count: r.items.len(),
+            saved_from: r.saved_from,
         }
     }
 }
@@ -159,6 +161,7 @@ fn list_records() -> Result<Vec<RecordView>, String> {
         modified: e.modified,
         opened: e.opened,
         item_count: e.item_count,
+        saved_from: e.saved_from,
     }).collect())
 }
 
@@ -178,6 +181,7 @@ fn search(query: String) -> Result<Vec<RecordView>, String> {
         modified: e.modified,
         opened: e.opened,
         item_count: e.item_count,
+        saved_from: e.saved_from,
     }).collect())
 }
 

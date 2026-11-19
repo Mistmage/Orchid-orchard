@@ -1,6 +1,7 @@
 use lilac_core::{
-    Record, delete_record, read_record, read_record_with_mtime, rebuild_index, record_path,
-    search_records, write_record, write_record_if_unchanged,
+    CollectionEntry, GroupHint, Record, delete_record, read_record, read_record_with_mtime,
+    rebuild_index, record_path, render_collection_entries, search_records, write_record,
+    write_record_if_unchanged,
 };
 use tempfile::TempDir;
 
@@ -148,6 +149,69 @@ fn malformed_file_does_not_crash_rebuild() {
     // only the valid one indexed
     assert_eq!(idx.records.len(), 1);
     assert_eq!(idx.records[0].id, "rec_ok");
+}
+
+#[test]
+fn captured_window_keeps_groups_but_no_browser_ids() {
+    let root = make_root();
+    let mut record = Record::new("rec_window", "collection");
+    record.title = Some("Saved tabs — Work".to_string());
+    record.saved_from = Some("window".to_string());
+    record.items = vec![
+        CollectionEntry {
+            id: Some("rec_a".to_string()),
+            url: "https://a.example/one".to_string(),
+            title: Some("A".to_string()),
+            group: Some("Work".to_string()),
+            group_color: Some("blue".to_string()),
+            pinned: false,
+            active: true,
+            muted: false,
+        },
+        CollectionEntry {
+            id: Some("rec_b".to_string()),
+            url: "https://b.example/two".to_string(),
+            title: Some("B".to_string()),
+            group: Some("Work".to_string()),
+            group_color: Some("blue".to_string()),
+            pinned: true,
+            active: false,
+            muted: true,
+        },
+    ];
+    record.tab_groups = vec![GroupHint {
+        name: "Work".to_string(),
+        color: "blue".to_string(),
+        collapsed: true,
+    }];
+    record.extra.insert(
+        "window_hint".to_string(),
+        serde_yaml::to_value(serde_json::json!({
+            "tab_count": 2,
+            "incognito": false,
+            "left": 100,
+            "top": 80
+        }))
+        .unwrap(),
+    );
+
+    let path = record_path(root.path(), &record);
+    let body = render_collection_entries(&record.items);
+    write_record(&path, &record, Some(&body)).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+
+    // Hints describe a shape; they never carry handles that only one browser
+    // session could resolve.
+    assert!(!text.contains("window_id"));
+    assert!(!text.contains("tab_id"));
+    assert!(!text.contains("groupId"));
+    assert!(!text.contains("tabId"));
+
+    let (read, read_body) = read_record(&path).unwrap();
+    assert_eq!(read.saved_from.as_deref(), Some("window"));
+    assert_eq!(read.tab_groups, record.tab_groups);
+    assert_eq!(read.items, record.items);
+    assert_eq!(read_body.as_deref(), Some(body.as_str()));
 }
 
 #[test]

@@ -32,9 +32,9 @@ pub use block_types::{
     validate_registry as validate_block_registry,
 };
 pub use collection::{
-    CollectionEntry, CollectionItem, collection_entries, dedupe_entries, parse_collection_body,
-    parse_collection_entries, render_collection_body, render_collection_entries,
-    set_collection_entries,
+    CollectionEntry, CollectionItem, GroupHint, collection_entries, dedupe_entries,
+    parse_collection_body, parse_collection_entries, render_collection_body,
+    render_collection_entries, set_collection_entries,
 };
 pub use editor::BlockEditor;
 pub use error::Error;

@@ -15,7 +15,11 @@ async function call(type, extra) {
   });
 }
 
-function escape(s) { return String(s == null ? "" : s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+function escape(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
 
 let currentView = "recent";
 
@@ -141,21 +145,68 @@ async function renderCollections() {
   const all = await fetchRecent();
   const items = all.filter((x) => x.type === "collection");
   if (!items.length) { list.innerHTML = "<div class='item'>No collections yet.</div>"; return; }
-  list.innerHTML = items.map((r) => `
+  list.innerHTML = items.map((r) => {
+    const count = r.item_count || 0;
+    const source = r.saved_from ? escape(r.saved_from) + " · " : "";
+    const group = r.group_name ? " · " + escape(r.group_name) + (r.group_color ? " (" + escape(r.group_color) + ")" : "") : "";
+    return `
     <div class="item">
       <div class="title">${escape(r.title || r.id)}</div>
-      <div class="url">${r.item_count || 0} tab${(r.item_count || 0) === 1 ? "" : "s"}${r.tab_group && r.tab_group.title ? " · " + escape(r.tab_group.title) : ""} · ${escape(r.id)}</div>
+      <div class="url">${source}${count} tab${count === 1 ? "" : "s"}${group} · ${escape(r.id)}</div>
       <div class="row">
-        <button data-reopen="${escape(r.id)}">Open all</button>
+        <select data-mode="${escape(r.id)}" title="How to reopen this set">
+          <option value="group">New group</option>
+          <option value="window">New window</option>
+          <option value="into">Into group…</option>
+        </select>
+        <select data-target="${escape(r.id)}" style="display:none" title="Target group"></select>
+        <button data-reopen="${escape(r.id)}">Open</button>
         <button data-edit="${escape(r.id)}">Edit</button>
         <button data-del="${escape(r.id)}">Delete</button>
       </div>
-    </div>
-  `).join("");
+    </div>`;
+  }).join("");
+  // Live groups are only used to fill the picker; the ids stay in this page.
+  let liveGroups = null;
+  async function ensureGroups() {
+    if (liveGroups) return liveGroups;
+    const resp = await call("listTabGroups");
+    liveGroups = (resp && resp.ok && resp.result && resp.result.groups) || [];
+    return liveGroups;
+  }
+  list.querySelectorAll("select[data-mode]").forEach((select) => {
+    const id = select.dataset.mode;
+    const target = list.querySelector(`select[data-target="${id}"]`);
+    select.addEventListener("change", async () => {
+      if (select.value !== "into") { target.style.display = "none"; return; }
+      const groups = await ensureGroups();
+      if (!groups.length) {
+        setStatus("No open tab groups to add to");
+        select.value = "group";
+        target.style.display = "none";
+        return;
+      }
+      target.innerHTML = groups.map((g) => {
+        const title = g.title || "(untitled)";
+        return `<option value="${escape(g.id)}">${escape(title)} · ${escape(g.color)} · ${g.tab_count} tab${g.tab_count === 1 ? "" : "s"}</option>`;
+      }).join("");
+      target.style.display = "";
+    });
+  });
   list.querySelectorAll("[data-reopen]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      const res = await call("reopenCollection", { id: btn.dataset.reopen });
-      setStatus("Opened " + (res && res.count ? res.count : 0) + " tabs");
+      const id = btn.dataset.reopen;
+      const modeSelect = list.querySelector(`select[data-mode="${id}"]`);
+      const targetSelect = list.querySelector(`select[data-target="${id}"]`);
+      const mode = modeSelect ? modeSelect.value : "group";
+      const groupId = mode === "into" && targetSelect && targetSelect.value
+        ? Number(targetSelect.value)
+        : null;
+      setStatus("Opening...");
+      const res = await call("reopenCollection", { id, mode, groupId });
+      if (!res || !res.ok) { setStatus("Error: " + (res && res.error)); return; }
+      const opened = (res.count || 0) + " tab" + ((res.count || 0) === 1 ? "" : "s");
+      setStatus(res.warning ? "Opened " + opened + " — " + res.warning : "Opened " + opened);
     });
   });
   list.querySelectorAll("[data-edit]").forEach((btn) => {
@@ -348,6 +399,26 @@ on("#saveSelected", "click", async () => {
   const folder = await getSetting("defaultSaveFolder", "");
   const resp = await call("saveSelectedTabs", { folder: folder || undefined });
   setStatus(resp && resp.ok ? "Saved " + (resp.result && resp.result.count) + " tabs" : "Error: " + (resp && resp.error));
+  render();
+});
+
+on("#saveGroup", "click", async () => {
+  setStatus("Saving group...");
+  const folder = await getSetting("defaultSaveFolder", "");
+  const resp = await call("saveTabGroup", { folder: folder || undefined });
+  if (!resp || !resp.ok) { setStatus("Error: " + (resp && resp.error)); return; }
+  const groups = (resp.result && resp.result.groups) || 0;
+  setStatus("Saved " + (resp.result && resp.result.count) + " tabs" + (groups ? " in " + groups + " group" + (groups === 1 ? "" : "s") : ""));
+  render();
+});
+
+on("#saveWindow", "click", async () => {
+  setStatus("Saving window...");
+  const folder = await getSetting("defaultSaveFolder", "");
+  const resp = await call("saveWindow", { folder: folder || undefined });
+  if (!resp || !resp.ok) { setStatus("Error: " + (resp && resp.error)); return; }
+  const groups = (resp.result && resp.result.groups) || 0;
+  setStatus("Saved " + (resp.result && resp.result.count) + " tabs" + (groups ? " in " + groups + " group" + (groups === 1 ? "" : "s") : ""));
   render();
 });
 

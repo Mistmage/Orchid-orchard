@@ -527,7 +527,7 @@ fn apply_patch(rec: &mut Record, patch: &Value) {
         for (k, v) in obj {
             if !matches!(
                 k.as_str(),
-                "title" | "status" | "url" | "tags" | "description"
+                "title" | "status" | "url" | "tags" | "description" | "folder"
             ) {
                 // try to convert to yaml value via json->yaml roundtrip
                 if let Ok(yv) = serde_yaml::to_value(v) {
@@ -556,6 +556,10 @@ fn idx_records_to_json(idx: &lilac_core::Index) -> Value {
                 "created": e.created,
                 "modified": e.modified,
                 "opened": e.opened,
+                "item_count": e.item_count,
+                "saved_from": e.saved_from,
+                "group_name": e.group_name,
+                "group_color": e.group_color,
             })
         })
         .collect();
@@ -566,7 +570,21 @@ fn idx_records_to_json(idx: &lilac_core::Index) -> Value {
 mod tests {
     use super::*;
     use std::path::Path;
+    use std::sync::OnceLock;
     use tempfile::TempDir;
+
+    /// One config root for every test in this module: `LILAC_CONFIG_ROOT` is
+    /// process-wide, so two tests pointing it at different directories would
+    /// race. The root only holds logs and the index cache.
+    fn test_config() -> &'static TempDir {
+        static CONFIG: OnceLock<TempDir> = OnceLock::new();
+        CONFIG.get_or_init(|| {
+            let dir = TempDir::new().unwrap();
+            // SAFETY: set once, before any other test runs, and never changed.
+            unsafe { std::env::set_var("LILAC_CONFIG_ROOT", dir.path()) };
+            dir
+        })
+    }
 
     fn call(root: &Path, method: &str, params: Value) -> Value {
         handle(root, json!({ "id": 1, "method": method, "params": params }))
@@ -578,10 +596,7 @@ mod tests {
 
     #[test]
     fn saves_are_stamped_and_opening_only_touches_opened() {
-        let config = TempDir::new().unwrap();
-        // SAFETY: this test is the only one in the crate; the process does not
-        // create threads that read the config root concurrently.
-        unsafe { std::env::set_var("LILAC_CONFIG_ROOT", config.path()) };
+        test_config();
         let dir = TempDir::new().unwrap();
         let root = dir.path();
 
@@ -616,5 +631,66 @@ mod tests {
         assert_eq!(third.created, first.created);
         assert_ne!(third.modified, first.modified);
         assert_eq!(third.opened, second.opened);
+    }
+
+    #[test]
+    fn search_results_carry_collection_metadata_without_browser_ids() {
+        test_config();
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        let saved = call(
+            root,
+            "save_record",
+            json!({
+                "record": {
+                    "id": "rec_win",
+                    "type": "collection",
+                    "title": "Saved tabs — Work",
+                    "saved_from": "window",
+                    "tab_group": { "title": "Work", "color": "blue" },
+                    "tab_groups": [
+                        { "name": "Work", "color": "blue", "collapsed": true }
+                    ],
+                    "items": [
+                        { "id": "rec_a", "url": "https://a.example", "title": "A" },
+                        { "id": "rec_b", "url": "https://b.example", "title": "B", "pinned": true }
+                    ]
+                },
+                "body": "- [[rec_a]]\n- [[rec_b]]"
+            }),
+        );
+        assert_eq!(saved.get("ok").and_then(|v| v.as_bool()), Some(true));
+
+        // The popup's collection list is built from search results, so every
+        // value it renders has to be in the index, not only in the file.
+        let found = call(root, "search_records", json!({ "query": "" }));
+        let results = found
+            .get("result")
+            .and_then(|r| r.get("results"))
+            .and_then(|r| r.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let entry = results
+            .iter()
+            .find(|e| e.get("id").and_then(|v| v.as_str()) == Some("rec_win"))
+            .expect("collection is in the results");
+        assert_eq!(entry.get("item_count").and_then(|v| v.as_u64()), Some(2));
+        assert_eq!(
+            entry.get("saved_from").and_then(|v| v.as_str()),
+            Some("window")
+        );
+        assert_eq!(
+            entry.get("group_name").and_then(|v| v.as_str()),
+            Some("Work")
+        );
+        assert_eq!(
+            entry.get("group_color").and_then(|v| v.as_str()),
+            Some("blue")
+        );
+        let text = serde_json::to_string(entry).unwrap();
+        assert!(!text.contains("window_id"));
+        assert!(!text.contains("tab_id"));
+        assert!(!text.contains("groupId"));
     }
 }

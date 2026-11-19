@@ -12,6 +12,37 @@ related:
 
 # T12 — Save tabs, tab groups and windows
 
+Shipped:
+
+- Three scopes in `extension/background.js`, all through one `saveTabSet`:
+  selected tabs, the active tab's group, and the whole current window. Saving a
+  group while the active tab is ungrouped is an error rather than a whole-window
+  save.
+- Captured set metadata: `saved_from` (`selection`, `group`, `window`), ordered
+  `tab_groups` (`{ name, color, collapsed }`), and per-tab `pinned`, `active`,
+  `muted`, `group`, `group_color`. A window capture also stores outer
+  `left`/`top`/`width`/`height` and `state` in `window_hint`.
+- `CollectionEntry` carries `active` and `muted` (both skip-if-false). `audible`
+  is deliberately not captured: it is transient, not restorable.
+- Reopen accepts `{ id, mode, groupId }`: `group` (default, current window),
+  `window` (new window, tabs created in order) and `into` (the user picks a live
+  group from `listTabGroups`). Pinned and muted state are restored, the captured
+  active tab is focused last, and groups are rebuilt in captured order with
+  collapsed state.
+- `rebuildGroups` reports `{ grouped, warning }`; the popup shows a degradation
+  message instead of silently claiming the shape was restored.
+- The index exposes `item_count`, `saved_from`, `group_name` and `group_color`
+  so the popup list renders counts and group badges from `search_records`
+  instead of reading every file.
+- No browser id is stored: `tab_groups` and entries have no id field, group ids
+  live only inside the extension, and a test asserts the serialized shape has no
+  `window_id`/`tab_id`/`groupId`.
+
+Verified: 147 core + 11 roundtrip + 5 probe + 6 host tests pass, clippy and
+`npx tsc --noEmit` are clean, and both extension scripts pass `node --check`.
+Live browser behaviour (group capture, window creation, reopen into an existing
+group) needs a manual check in Chrome; CDP cannot drive the extension here.
+
 ## Goal
 
 A user can capture not just a page but a working set: selected tabs, a whole tab
@@ -52,12 +83,14 @@ ordering code instead of writing two capture paths.
 ## Done when
 
 - Saving a group writes one set record whose entries match the group order and
-  whose metadata matches the group name and colour.
+  whose metadata matches the group name and colour. **Done in the extension**;
+  manual browser check pending.
 - Reopening into an existing group puts every tab in that group and preserves
-  order.
-- The record contains no browser ids (asserted in a test).
+  order. **Done in the extension**; manual browser check pending.
+- The record contains no browser ids (asserted in a test). **Done** — the
+  serialized set shape has no `window_id`, `tab_id` or `groupId`.
 - Excluding an entry in the preview removes it from both the page save and the
-  set.
+  set. **Blocked on T9**, which owns the preview plan.
 
 ## Open questions
 
