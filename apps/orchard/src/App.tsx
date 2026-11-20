@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, Index, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { EditorView, keymap } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
@@ -1280,16 +1280,21 @@ export default function App() {
   loadTemplates();
 
   // persist + apply icon choice
-  createEffect(() => {
-    const c = iconChoice();
-    localStorage.setItem("orchard.icon", c);
-    const link = document.querySelector('link[rel="icon"]') as HTMLLinkElement | null;
-    if (link) link.href = c === "sideways" ? "/icon2.svg" : "/icon.svg";
-  });
+  createEffect(
+    () => iconChoice(),
+    (c) => {
+      localStorage.setItem("orchard.icon", c);
+      const link = document.querySelector('link[rel="icon"]') as HTMLLinkElement | null;
+      if (link) link.href = c === "sideways" ? "/icon2.svg" : "/icon.svg";
+    }
+  );
 
-  createEffect(() => {
-    localStorage.setItem("orchard.indentBlocks", String(indentBlocks()));
-  });
+  createEffect(
+    () => indentBlocks(),
+    (indent) => {
+      localStorage.setItem("orchard.indentBlocks", String(indent));
+    }
+  );
 
   return (
     <>
@@ -1520,7 +1525,7 @@ export default function App() {
                 <section class="settings-section">
                   <h3>Global rules</h3>
                   <div class="hint">Applied in order when no domain override matches. A later rule sees the previous rule's result.</div>
-                  <Index each={namingDraft().rules}>
+                  <For each={namingDraft().rules} keyed={false}>
                     {(rule, i) => (
                       <RuleEditor
                         rule={rule()}
@@ -1529,7 +1534,7 @@ export default function App() {
                         onRemove={() => removeGlobalRule(i)}
                       />
                     )}
-                  </Index>
+                  </For>
                   <div class="row">
                     <button onClick={addGlobalRule}>Add global rule</button>
                   </div>
@@ -1542,7 +1547,7 @@ export default function App() {
                     (<code class="mono">*.example.com</code>). The first match wins and replaces the
                     global rules for that host; <code class="mono">www.</code> is ignored.
                   </div>
-                  <Index each={namingDraft().domains}>
+                  <For each={namingDraft().domains} keyed={false}>
                     {(domain, i) => (
                       <div class="rule-card">
                         <div class="row">
@@ -1560,7 +1565,7 @@ export default function App() {
                         />
                       </div>
                     )}
-                  </Index>
+                  </For>
                   <div class="row">
                     <button onClick={addDomain}>Add domain override</button>
                   </div>
