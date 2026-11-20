@@ -279,12 +279,7 @@ async function renderWorkspaces() {
   if (saveBtn) saveBtn.addEventListener("click", async () => {
     const title = $("#w-title").value.trim();
     const description = $("#w-desc").value.trim();
-    setStatus("Saving workspace...");
-    const resp = await call("saveWorkspace", { title, description });
-    if (!resp || !resp.ok) { setStatus("Error: " + (resp && resp.error)); return; }
-    const res = resp.result || {};
-    setStatus("Saved " + (res.count || 0) + " tabs as a workspace");
-    renderWorkspaces();
+    await openSavePreview({ source: "workspace", title, description });
   });
   // Live groups fill the "into" picker; the ids never leave this page.
   list.querySelectorAll("select[data-wmode]").forEach((select) => {
@@ -349,6 +344,245 @@ async function renderWorkspaces() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Save preview
+//
+// A save is planned in Rust and rendered here. The same drafts are committed,
+// so what the preview shows is what gets written; edits mutate the drafts.
+// ---------------------------------------------------------------------------
+
+let pendingSave = null;
+
+const KNOWN_RECORD_KEYS = new Set([
+  "id", "type", "target_type", "version", "title", "icon", "color",
+  "description", "created", "modified", "opened", "last_viewed", "parent",
+  "related", "links", "tags", "categories", "status", "url", "folder",
+  "items", "saved_from", "tab_groups", "geometry", "authority", "lineage",
+  "forked_from", "snapshot", "snapshot_format",
+]);
+
+function draftTypeLabel(record) {
+  return record.type + (record.target_type ? " · " + record.target_type : "");
+}
+
+function draftWarnings(draft) {
+  const warnings = (draft.warnings || []).slice();
+  if (draft.duplicate_of) warnings.push("duplicate of " + draft.duplicate_of);
+  return warnings;
+}
+
+function extraFields(record) {
+  return Object.keys(record).filter((key) => !KNOWN_RECORD_KEYS.has(key));
+}
+
+function primitiveInput(key, value, extra) {
+  const attr = extra ? ` data-extra="${escape(key)}"` : "";
+  const idAttr = extra ? "" : ` id="p-${escape(key)}"`;
+  if (typeof value === "boolean") {
+    return `<label>${escape(key)} <input type="checkbox"${idAttr}${attr} ${value ? "checked" : ""} /></label>`;
+  }
+  const type = typeof value === "number" ? "number" : "text";
+  return `<label>${escape(key)} <input${idAttr} type="${type}"${attr} value="${escape(value)}" style="width:100%" /></label>`;
+}
+
+function recordDetail(draft, index, showBack) {
+  const r = draft.record;
+  const warnings = draftWarnings(draft);
+  const extra = extraFields(r).map((key) => {
+    const value = r[key];
+    if (value == null) return "";
+    if (typeof value === "object") {
+      return `<div class="url">${escape(key)}: <code class="mono">${escape(JSON.stringify(value))}</code></div>`;
+    }
+    return `<div class="row">${primitiveInput(key, value, true)}</div>`;
+  }).join("");
+  return `
+    <div class="item">
+      <div class="title">${escape(r.title || "(untitled)")}</div>
+      <div class="url">${escape(draftTypeLabel(r))} · ${escape(draft.path)}</div>
+      <div class="row"><label>Title <input id="p-title" value="${escape(r.title || "")}" style="width:100%" /></label></div>
+      <div class="row"><label>Folder (under Records/; blank = type folder) <input id="p-folder" value="${escape(r.folder || "")}" style="width:100%" /></label></div>
+      <div class="row"><label>Tags (comma separated) <input id="p-tags" value="${escape((r.tags || []).join(", "))}" style="width:100%" /></label></div>
+      <div class="row"><label>Status <input id="p-status" value="${escape(r.status || "")}" style="width:100%" /></label></div>
+      <div class="row"><label>Description <input id="p-description" value="${escape(r.description || "")}" style="width:100%" /></label></div>
+      ${r.url != null ? `<div class="row"><label>URL <input id="p-url" value="${escape(r.url)}" style="width:100%" /></label></div>` : ""}
+      <div class="url">id ${escape(r.id)} · ${escape(r.type)}${r.saved_from ? " · saved from " + escape(r.saved_from) : ""}</div>
+      <div class="url">file: <span id="p-path">${escape(draft.path)}</span></div>
+      <div class="url">filename: <span id="p-filename">${escape(draft.filename || "")}</span></div>
+      ${r.snapshot ? `<div class="url">snapshot: ${escape(r.snapshot)}${r.snapshot_format ? " (" + escape(r.snapshot_format) + ")" : ""}</div>` : ""}
+      ${warnings.length ? `<div class="warnings">${warnings.map((w) => `<div class="error">${escape(w)}</div>`).join("")}</div>` : ""}
+      ${extra}
+      <div class="row"><label>Body<br><textarea id="p-body" rows="6" style="width:100%">${escape(draft.body || "")}</textarea></label></div>
+      <div class="row">
+        <label><input type="checkbox" id="p-excluded" ${draft.excluded ? "checked" : ""} /> Exclude this record</label>
+      </div>
+      <div class="row">
+        ${showBack ? `<button id="p-back">Back to list</button>` : ""}
+        <button id="p-commit-one">Save ${showBack ? "all included" : "record"}</button>
+      </div>
+    </div>`;
+}
+
+function collectDetail(draft) {
+  const r = draft.record;
+  const read = (id) => { const el = $(id); return el ? el.value : undefined; };
+  const title = read("#p-title");
+  if (title !== undefined) r.title = title.trim() ? title : null;
+  const folder = read("#p-folder");
+  if (folder !== undefined) r.folder = folder.trim() ? folder.trim() : null;
+  const tags = read("#p-tags");
+  if (tags !== undefined) r.tags = tags.split(",").map((s) => s.trim()).filter(Boolean);
+  const status = read("#p-status");
+  if (status !== undefined) r.status = status.trim() ? status : null;
+  const description = read("#p-description");
+  if (description !== undefined) r.description = description.trim() ? description : null;
+  const url = read("#p-url");
+  if (url !== undefined) r.url = url.trim() ? url : null;
+  const body = read("#p-body");
+  if (body !== undefined) draft.body = body;
+  const excluded = $("#p-excluded");
+  if (excluded) draft.excluded = !!excluded.checked;
+  list.querySelectorAll("[data-extra]").forEach((el) => {
+    const key = el.dataset.extra;
+    if (!key) return;
+    if (el.type === "checkbox") r[key] = !!el.checked;
+    else if (el.type === "number") r[key] = el.value === "" ? null : Number(el.value);
+    else r[key] = el.value === "" ? null : el.value;
+  });
+}
+
+async function refreshDraftPath(draft) {
+  try {
+    const resp = await call("planPath", { record: draft.record });
+    if (resp && resp.ok && resp.result) {
+      draft.path = resp.result.path;
+      draft.filename = resp.result.filename;
+      const el = $("#p-path");
+      if (el) el.textContent = draft.path;
+      const name = $("#p-filename");
+      if (name) name.textContent = draft.filename;
+    }
+  } catch (e) {}
+}
+
+function renderPreview() {
+  const plan = pendingSave && pendingSave.plan;
+  if (!plan) { list.innerHTML = "<div class='item'>No plan.</div>"; return; }
+  const records = plan.records || [];
+  const single = records.length === 1;
+  if (single && pendingSave.detail == null) pendingSave.detail = 0;
+  const detailIndex = pendingSave.detail;
+
+  if (detailIndex != null && records[detailIndex]) {
+    list.innerHTML = `
+      ${single ? "" : `<div class="row"><button id="p-back-top">Back to list</button></div>`}
+      ${recordDetail(records[detailIndex], detailIndex, !single)}`;
+    const back = $("#p-back"); if (back) back.addEventListener("click", async () => { collectDetail(records[detailIndex]); await refreshDraftPath(records[detailIndex]); pendingSave.detail = null; renderPreview(); });
+    const backTop = $("#p-back-top"); if (backTop) backTop.addEventListener("click", async () => { collectDetail(records[detailIndex]); await refreshDraftPath(records[detailIndex]); pendingSave.detail = null; renderPreview(); });
+    const commitOne = $("#p-commit-one"); if (commitOne) commitOne.addEventListener("click", commitPreview);
+    ["#p-title", "#p-folder", "#p-url"].forEach((sel) => {
+      const el = $(sel);
+      if (el) el.addEventListener("change", () => { collectDetail(records[detailIndex]); refreshDraftPath(records[detailIndex]); });
+    });
+    return;
+  }
+
+  const rows = records.map((draft, index) => {
+    const warnings = draftWarnings(draft);
+    return `
+      <div class="item">
+        <div class="row">
+          <label><input type="checkbox" data-exclude="${index}" ${draft.excluded ? "" : "checked"} /> include</label>
+          <div class="title" style="flex:1">${escape(draft.record.title || "(untitled)")}</div>
+        </div>
+        <div class="url">${escape(draftTypeLabel(draft.record))} · ${escape(draft.path)}</div>
+        ${warnings.length ? `<div class="warnings">${warnings.map((w) => `<div class="error">${escape(w)}</div>`).join("")}</div>` : ""}
+        <div class="row">
+          <button data-detail="${index}">Details</button>
+        </div>
+      </div>`;
+  }).join("");
+
+  list.innerHTML = `
+    <div class="item">
+      <div class="title">Preview · ${escape(plan.source || "")}</div>
+      <div class="url">${records.length} record${records.length === 1 ? "" : "s"}; ${records.filter((d) => !d.excluded).length} will be written.</div>
+      ${(plan.duplicates || []).length ? `<div class="url">${plan.duplicates.length} duplicate page${plan.duplicates.length === 1 ? "" : "s"} already saved (reported, not dropped yet).</div>` : ""}
+      ${(plan.warnings || []).length ? `<div class="warnings">${plan.warnings.map((w) => `<div class="error">${escape(w)}</div>`).join("")}</div>` : ""}
+      <div class="row">
+        <button id="p-commit">Save ${records.filter((d) => !d.excluded).length}</button>
+        <button id="p-cancel">Cancel</button>
+      </div>
+    </div>
+    ${rows}`;
+
+  list.querySelectorAll("[data-exclude]").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const draft = records[Number(cb.dataset.exclude)];
+      if (draft) draft.excluded = !cb.checked;
+      const commit = $("#p-commit");
+      if (commit) commit.textContent = "Save " + records.filter((d) => !d.excluded).length;
+    });
+  });
+  list.querySelectorAll("[data-detail]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      pendingSave.detail = Number(btn.dataset.detail);
+      renderPreview();
+    });
+  });
+  const commit = $("#p-commit"); if (commit) commit.addEventListener("click", commitPreview);
+  const cancel = $("#p-cancel"); if (cancel) cancel.addEventListener("click", cancelPreview);
+}
+
+async function openSavePreview(msg) {
+  setStatus("Planning...");
+  const resp = await call("startSave", msg);
+  if (!resp || !resp.ok) { setStatus("Error: " + (resp && resp.error)); return; }
+  const result = resp.result || {};
+  pendingSave = { plan: result.plan, source: result.source, detail: null };
+  currentView = "preview";
+  document.querySelectorAll("nav button").forEach((x) => x.classList.remove("active"));
+  setStatus("");
+  renderPreview();
+}
+
+function cancelPreview() {
+  const plan = pendingSave && pendingSave.plan;
+  const counted = plan && plan.records ? plan.records.length : 0;
+  pendingSave = null;
+  currentView = "recent";
+  document.querySelectorAll("nav button").forEach((x) => x.classList.remove("active"));
+  const recent = document.querySelector('nav button[data-view="recent"]');
+  if (recent) recent.classList.add("active");
+  setStatus(counted ? "Cancelled; nothing was saved" : "Cancelled");
+  render();
+}
+
+async function commitPreview() {
+  if (!pendingSave) return;
+  if (pendingSave.detail != null) {
+    const draft = pendingSave.plan.records[pendingSave.detail];
+    if (draft) collectDetail(draft);
+  }
+  setStatus("Saving...");
+  const resp = await call("commitSave", { plan: pendingSave.plan });
+  if (!resp || !resp.ok) { setStatus("Error: " + (resp && resp.error)); return; }
+  const report = resp.result || {};
+  const written = (report.written || []).length;
+  const skipped = (report.skipped || []).length;
+  const failed = (report.failed || []).length;
+  const parts = ["Saved " + written];
+  if (skipped) parts.push(skipped + " skipped");
+  if (failed) parts.push(failed + " failed: " + (report.failed || []).map((f) => f.id + " (" + f.error + ")").join("; "));
+  pendingSave = null;
+  currentView = "recent";
+  document.querySelectorAll("nav button").forEach((x) => x.classList.remove("active"));
+  const recent = document.querySelector('nav button[data-view="recent"]');
+  if (recent) recent.classList.add("active");
+  setStatus(parts.join(" · "));
+  render();
+}
+
 async function renderTags() {
   list.innerHTML = "Loading...";
   const items = await fetchRecent();
@@ -393,7 +627,7 @@ async function renderSettings() {
   list.innerHTML = "Loading...";
   const cfg = await call("getConfig");
   const rr = (cfg && cfg.result && cfg.result.records_root) || "";
-  const preview = await getSetting("previewSingle", false);
+  const instant = await getSetting("instantSave", false);
   const defaultFolder = await getSetting("defaultSaveFolder", "");
   const registered = (cfg && cfg.result && cfg.result.registered_folders) || [];
   list.innerHTML = `
@@ -415,8 +649,9 @@ async function renderSettings() {
         <button id="s-change">Change folder</button>
       </div>
       <div class="row" style="margin-top:8px;">
-        <label><input type="checkbox" id="s-preview" ${preview ? "checked" : ""} /> Preview single record before saving</label>
+        <label><input type="checkbox" id="s-instant" ${instant ? "checked" : ""} /> Save page instantly (skip the preview)</label>
       </div>
+      <div class="url" style="opacity:0.7;">Off by default. Only single-page saves skip the preview; selections, groups, windows, workspaces and snapshots are always shown first. Rules, de-duplication and placement still run.</div>
       <div class="row" style="margin-top:8px;">
         <button id="s-rebuild">Rebuild index</button>
         <button id="s-conflicts">Check conflicts</button>
@@ -439,7 +674,7 @@ async function renderSettings() {
     const r = await call("listConflicts"); const c = (r && r.result && r.result.conflicts) || [];
     setStatus(c.length ? "Conflicts: " + c.map((x) => x.path).join(", ") : "No conflicts");
   });
-  const previewCb = $("#s-preview"); if (previewCb) previewCb.addEventListener("change", () => setSetting("previewSingle", previewCb.checked));
+  const instantCb = $("#s-instant"); if (instantCb) instantCb.addEventListener("change", () => setSetting("instantSave", instantCb.checked));
   const defSel = $("#s-defaultfolder"); if (defSel) defSel.addEventListener("change", () => setSetting("defaultSaveFolder", defSel.value));
   // Naming is configured in Orchard Settings; the host owns the config.
   list.innerHTML += `
@@ -477,6 +712,7 @@ async function render() {
   if (currentView === "recent") await renderRecent();
   else if (currentView === "collections") await renderCollections();
   else if (currentView === "workspaces") await renderWorkspaces();
+  else if (currentView === "preview") renderPreview();
   else if (currentView === "tags") await renderTags();
   else if (currentView === "search") await renderSearch();
   else if (currentView === "settings") await renderSettings();
@@ -484,6 +720,8 @@ async function render() {
 
 document.querySelectorAll("nav button").forEach((b) => {
   b.addEventListener("click", () => {
+    // Leaving a preview abandons the plan: nothing has been written.
+    pendingSave = null;
     document.querySelectorAll("nav button").forEach((x) => x.classList.remove("active"));
     b.classList.add("active");
     currentView = b.dataset.view;
@@ -500,52 +738,38 @@ async function getSetting(key, def) {
   });
 }
 
-on("#saveTab", "click", async () => {
-  const preview = await getSetting("previewSingle", false);
-  if (preview) {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    const t = tabs && tabs[0];
-    if (!t) { setStatus("No active tab"); return; }
-    let groupInfo = "";
-    if (t.groupId && t.groupId !== -1 && chrome.tabGroups && chrome.tabGroups.get) {
-      try { const g = await chrome.tabGroups.get(t.groupId); groupInfo = "Group: " + (g.title || "(untitled)") + " (" + g.color + ")"; } catch (e) {}
-    }
-    const msg = "Save this tab?\n\nTitle: " + (t.title || "") + "\nURL: " + (t.url || "") + (groupInfo ? "\n" + groupInfo : "");
-    if (!confirm(msg)) { setStatus("Cancelled"); return; }
-  }
+async function saveInstantly(msg) {
   setStatus("Saving...");
-  const folder = await getSetting("defaultSaveFolder", "");
-  const resp = await call("saveCurrentTab", { folder: folder || undefined });
-  setStatus(resp && resp.ok ? "Saved" : "Error: " + (resp && resp.error));
+  const resp = await call("startSave", msg);
+  if (!resp || !resp.ok) { setStatus("Error: " + (resp && resp.error)); return; }
+  const committed = await call("commitSave", { plan: resp.result.plan });
+  if (!committed || !committed.ok) { setStatus("Error: " + (committed && committed.error)); return; }
+  const report = committed.result || {};
+  const failed = (report.failed || []).length;
+  setStatus("Saved " + (report.written || []).length + (failed ? " · " + failed + " failed" : ""));
   render();
+}
+
+on("#saveTab", "click", async () => {
+  const folder = await getSetting("defaultSaveFolder", "");
+  const instant = await getSetting("instantSave", false);
+  if (instant) { await saveInstantly({ source: "page", folder: folder || undefined }); return; }
+  await openSavePreview({ source: "page", folder: folder || undefined });
 });
 
 on("#saveSelected", "click", async () => {
-  setStatus("Saving selected...");
   const folder = await getSetting("defaultSaveFolder", "");
-  const resp = await call("saveSelectedTabs", { folder: folder || undefined });
-  setStatus(resp && resp.ok ? "Saved " + (resp.result && resp.result.count) + " tabs" : "Error: " + (resp && resp.error));
-  render();
+  await openSavePreview({ source: "selection", folder: folder || undefined });
 });
 
 on("#saveGroup", "click", async () => {
-  setStatus("Saving group...");
   const folder = await getSetting("defaultSaveFolder", "");
-  const resp = await call("saveTabGroup", { folder: folder || undefined });
-  if (!resp || !resp.ok) { setStatus("Error: " + (resp && resp.error)); return; }
-  const groups = (resp.result && resp.result.groups) || 0;
-  setStatus("Saved " + (resp.result && resp.result.count) + " tabs" + (groups ? " in " + groups + " group" + (groups === 1 ? "" : "s") : ""));
-  render();
+  await openSavePreview({ source: "group", folder: folder || undefined });
 });
 
 on("#saveWindow", "click", async () => {
-  setStatus("Saving window...");
   const folder = await getSetting("defaultSaveFolder", "");
-  const resp = await call("saveWindow", { folder: folder || undefined });
-  if (!resp || !resp.ok) { setStatus("Error: " + (resp && resp.error)); return; }
-  const groups = (resp.result && resp.result.groups) || 0;
-  setStatus("Saved " + (resp.result && resp.result.count) + " tabs" + (groups ? " in " + groups + " group" + (groups === 1 ? "" : "s") : ""));
-  render();
+  await openSavePreview({ source: "window", folder: folder || undefined });
 });
 
 on("#openFolder", "click", async () => {
@@ -595,14 +819,8 @@ on("#changeFolder", "click", async () => {
 });
 
 on("#snapshotTab", "click", async () => {
-  setStatus("Snapshotting...");
-  const resp = await call("snapshotCurrentTab");
-  if (resp && resp.ok) {
-    setStatus("Snapshotted: " + (resp.result && resp.result.asset && resp.result.asset.path));
-    render();
-  } else {
-    setStatus("Error: " + (resp && resp.error));
-  }
+  const folder = await getSetting("defaultSaveFolder", "");
+  await openSavePreview({ source: "snapshot", folder: folder || undefined });
 });
 
 render();

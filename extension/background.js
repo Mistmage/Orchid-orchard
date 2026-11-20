@@ -153,6 +153,165 @@ async function tabGroupsFor(tabs) {
   return { groups, byId };
 }
 
+/// One tab as the save planner sees it: authoritative url/title plus browser
+/// hints. Ids never enter the plan; only names, order and state do.
+function planTabOf(t, hints, groupsById) {
+  const tab = {
+    url: t.url || "",
+    title: t.title || "",
+    pinned: !!t.pinned,
+    active: !!t.active,
+    muted: !!t.muted,
+    extra: {},
+  };
+  const group = groupsById.get(t.groupId) || null;
+  if (group) {
+    tab.group = group.name;
+    tab.group_color = group.color;
+    tab.group_collapsed = !!group.collapsed;
+    tab.extra.tab_group = { title: group.name, color: group.color };
+  }
+  const hint = hints.get(t.id);
+  if (hint) tab.extra.window_hint = hint;
+  return tab;
+}
+
+/// Resolve a save source into the tabs it means. Preview and commit share this,
+/// so they can never disagree about what a scope captured.
+async function tabsForSource(source) {
+  let tabs = [];
+  let windowId = null;
+  if (source === "page" || source === "snapshot") {
+    const active = await chrome.tabs.query({ active: true, currentWindow: true });
+    const t = active && active[0];
+    if (!t) throw new Error("no active tab");
+    tabs = [t];
+    windowId = t.windowId;
+  } else if (source === "selection") {
+    // Only tabs the user actually highlighted: falling back to the whole
+    // window would make "save selected" quietly save everything.
+    tabs = await chrome.tabs.query({ highlighted: true, currentWindow: true });
+    windowId = tabs.length ? tabs[0].windowId : null;
+  } else if (source === "group") {
+    const active = await chrome.tabs.query({ active: true, currentWindow: true });
+    const t = active && active[0];
+    if (!t) throw new Error("no active tab");
+    if (!t.groupId || t.groupId === -1) {
+      throw new Error("the active tab is not in a tab group");
+    }
+    windowId = t.windowId;
+    const inWindow = await chrome.tabs.query({ windowId });
+    tabs = inWindow.filter((candidate) => candidate.groupId === t.groupId);
+  } else if (source === "window" || source === "workspace") {
+    const active = await chrome.tabs.query({ active: true, currentWindow: true });
+    const t = active && active[0];
+    if (!t) throw new Error("no active window");
+    windowId = t.windowId;
+    tabs = await chrome.tabs.query({ windowId });
+  } else {
+    throw new Error("unknown save source: " + source);
+  }
+  const ordered = (tabs || [])
+    .filter((t) => isWebUrl(t.url))
+    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  if (!ordered.length) throw new Error("there are no http(s) tabs to save");
+  const hints = await tabHints(ordered);
+  const { byId } = await tabGroupsFor(ordered);
+  return {
+    windowId,
+    tabs: ordered.map((t) => planTabOf(t, hints, byId)),
+  };
+}
+
+/// Snapshot bytes are an asset, not a record: capture them before the plan so
+/// the preview can show the file the record will point at. A content-addressed
+/// asset written and then cancelled is harmless.
+async function captureSnapshot(tab) {
+  const base64Of = async (blob) => {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let bin = "";
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  };
+  if (chrome.pageCapture && chrome.pageCapture.saveAsMHTML) {
+    try {
+      const blob = await new Promise((resolve, reject) => {
+        chrome.pageCapture.saveAsMHTML({ tabId: tab.id }, (captured) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message || "capture failed"));
+          } else if (!captured) {
+            reject(new Error("capture failed"));
+          } else {
+            resolve(captured);
+          }
+        });
+      });
+      const asset = await send("save_asset", {
+        data: await base64Of(blob),
+        ext: "mhtml",
+        subdir: "Assets",
+      });
+      return { path: asset.path, format: "mhtml", title: tab.title, url: tab.url };
+    } catch (e) {
+      // Fall through to the cross-browser HTML extraction.
+    }
+  }
+  const extracted = await new Promise((resolve) => {
+    chrome.tabs.sendMessage(tab.id, { type: "extractHtml" }, (resp) => resolve(resp));
+  });
+  if (!extracted || !extracted.ok) {
+    throw new Error((extracted && extracted.error) || "could not capture this page");
+  }
+  const asset = await send("save_asset", {
+    data: btoa(unescape(encodeURIComponent(extracted.html))),
+    ext: "html",
+    subdir: "Assets",
+  });
+  return {
+    path: asset.path,
+    format: "html",
+    title: extracted.title || tab.title,
+    url: extracted.url || tab.url,
+  };
+}
+
+/// Build the plan a preview will show and a commit will write. Nothing here
+/// writes a record; a workspace may describe its display, which is a lookup.
+async function startSaveFor(msg) {
+  const source = msg.source || "page";
+  const { windowId, tabs } = await tabsForSource(source);
+  const request = {
+    source,
+    tabs,
+    folder: msg.folder || null,
+    title: msg.title || null,
+    description: msg.description || null,
+  };
+  if (source === "workspace") {
+    const win = await chrome.windows.get(windowId);
+    let geometry = geometryFromWindow(win);
+    const displays = await displayInfos();
+    if (displays.length && geometry.left != null) {
+      try {
+        const described = await send("describe_display", { geometry, displays });
+        if (described && described.geometry) geometry = described.geometry;
+      } catch (e) {}
+    }
+    request.geometry = geometry;
+  }
+  if (source === "snapshot") {
+    const active = await chrome.tabs.query({ active: true, currentWindow: true });
+    const captured = await captureSnapshot(active && active[0]);
+    request.source = "page";
+    request.tabs[0].snapshot = captured.path;
+    request.tabs[0].snapshot_format = captured.format;
+    request.tabs[0].title = captured.title || request.tabs[0].title;
+    request.tabs[0].url = captured.url || request.tabs[0].url;
+  }
+  const plan = await send("plan_save", request);
+  return { plan, source };
+}
+
 /// A set's body mirrors its entries as links, so the file stays readable.
 function setBody(entries) {
   return entries.map((entry) => "- [[" + entry.id + "]]").join("\n");
@@ -536,7 +695,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || !msg.type) return;
   (async () => {
     try {
-      if (msg.type === "saveCurrentTab") {
+      if (msg.type === "startSave") {
+        // The popup renders the plan; commits go back through the same drafts.
+        const started = await startSaveFor(msg);
+        sendResponse({ ok: true, result: started });
+      } else if (msg.type === "commitSave") {
+        const report = await send("commit_save", { plan: msg.plan });
+        sendResponse({ ok: true, result: report });
+      } else if (msg.type === "saveCurrentTab") {
         const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
         const t = tabs && tabs[0];
         if (!t) throw new Error("no active tab");
@@ -857,19 +1023,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // Keyboard shortcuts
 chrome.commands.onCommand.addListener(async (command) => {
   if (command === "save-tab") {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    const t = tabs && tabs[0];
-    if (!t) return;
-    const record = { type: "page", title: t.title || "", url: t.url || "", tags: [] };
-    const hints = await tabHints([t]);
-    if (hints.has(t.id)) record.window_hint = hints.get(t.id);
-    if (t.groupId && t.groupId !== -1 && chrome.tabGroups && chrome.tabGroups.get) {
-      try {
-        const g = await chrome.tabGroups.get(t.groupId);
-        if (g) record.tab_group = { title: g.title || "", color: g.color || "" };
-      } catch (e) {}
+    // A keyboard save has no window for a preview, so it commits the same plan
+    // the popup would have shown.
+    const started = await startSaveFor({ source: "page" });
+    if (started && started.plan && started.plan.records.length) {
+      await send("commit_save", { plan: started.plan });
     }
-    await send("save_record", { record, body: "" });
   } else if (command === "open-manager") {
     const url = chrome.runtime.getURL("lilac.html");
     await chrome.tabs.create({ url });

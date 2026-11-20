@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Rust toolchain (stable) with the MSVC target on Windows.
-- Node 20+ and npm (SolidJS + Vite frontend).
+- Node 22.12+ and npm (Solid 2 + Vite 8 frontend).
 
 ## Build & run
 
@@ -73,7 +73,7 @@ contain `..` are ignored.
   `indent` from the parsed shape. `missing_metadata()` reports required fields a
   file does not provide, and the record view shows the extracted values next to
   each block.
-- The frontend is SolidJS 2.0 RC + Vite (`apps/orchard/src/App.tsx`), a thin
+- The frontend is Solid 2 + Vite 8 (`apps/orchard/src/App.tsx`), a thin
   renderer that invokes Tauri commands and paints the returned block tree.
 - No document structure or parsing lives in JS.
 - `RecordSession` (`crates/lilac-core/src/session.rs`) owns the open document:
@@ -247,6 +247,42 @@ applied when the window is created, groups and the active tab are restored, and
 `maximized`/`fullscreen` is applied last so the window does not jump while it is
 being filled. `minimized` is not restored. Warnings are joined into one message
 so the popup can show a partly restored open.
+
+## Save plans and preview
+
+Every save is a plan first. `crates/lilac-core/src/save_plan.rs` builds
+`SavePlan { source, records: [SaveDraft], duplicates, warnings }` without writing
+anything; `commit_plan` writes the drafts, and a failing record does not stop the
+others. `SaveDraft { id, record, body, path, filename, excluded, duplicate_of,
+warnings }` is the unit the popup renders.
+
+The plan is built in save order: naming, folder placement (`normalize_folder`
+rejects escapes and reports them as warnings), rules, duplicate detection
+against the index's `url`, and a title fallback. A page draft carries the same
+`window_hint`, `tab_group`, snapshot and group metadata a direct save would have
+written. A set records its ordered `items`, `tab_groups` and `saved_from`; a
+workspace also carries geometry.
+
+The native host exposes:
+
+- `plan_save` — builds the plan from `{ source, tabs, folder, title,
+  description, geometry }`. `source` is `page`, `selection`, `group`, `window`,
+  `workspace` or `snapshot` (the extension turns a snapshot into a page plan
+  after capturing the asset). Rules run only when `rules.auto_apply` is on; a
+  broken rules file becomes a plan warning instead of blocking the save.
+- `commit_save` — writes a plan. Excluded drafts are reported in `skipped`, not
+  written. For a set, excluding a page also removes its `[[id]]` entry from the
+  set's items and body, and corrected page titles/URLs are copied into the
+  entries.
+- `plan_path` — recomputes `{ path, filename }` from an edited record, so the
+  preview's filename follows a corrected title or folder.
+
+The popup's preview shows a single record in full detail or several as a list
+with per-record inclusion and a Details view. Edits are made to the plan's
+drafts, so the commit writes the corrected title, folder, tags, status,
+description, URL, extra fields and body. Cancel discards the plan. The
+**Save page instantly** setting (off by default) skips the preview for a single
+page only; selections, groups, windows, workspaces and snapshots always preview.
 
 ## Templates
 

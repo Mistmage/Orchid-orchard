@@ -5,8 +5,8 @@ use config::{load_config, logs_dir, set_records_root};
 use lilac_core::{
     NamingConfig, NamingRule, Record, Wal, apply_block_edit,
     apply_rules_reported as apply_rules_core, delete_record, generate_record_id, normalize_folder,
-    parse_rules, read_record, rebuild_index, record_path, search_records, touch_opened,
-    write_record,
+    parse_rules, read_record, rebuild_index, record_filename, record_path, search_records,
+    touch_opened, write_record,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -82,6 +82,47 @@ fn write_message(v: &Value) -> Result<(), String> {
     Ok(())
 }
 
+fn plan_with_rules(
+    records_root: &std::path::Path,
+    request: &lilac_core::PlanRequest,
+    cfg: &config::Config,
+    rules_text: &str,
+) -> lilac_core::SavePlan {
+    // Rules only run when the user has turned auto-apply on. A preview must
+    // agree with the commit, so both go through this one decision.
+    let (rules, warning) = if cfg.rules.auto_apply {
+        parse_save_rules(rules_text)
+    } else {
+        (Vec::new(), None)
+    };
+    let mut plan = lilac_core::plan_save(records_root, request, &cfg.naming, &rules);
+    if let Some(warning) = warning {
+        plan.warnings.push(warning);
+    }
+    plan
+}
+
+fn parse_save_rules(text: &str) -> (Vec<lilac_core::Rule>, Option<String>) {
+    if text.trim().is_empty() {
+        return (Vec::new(), None);
+    }
+    match parse_rules(text) {
+        Ok(ruleset) => (ruleset.rules, None),
+        Err(e) => {
+            // A broken rules file never blocks a save. It is logged and the
+            // preview says so, so the file is not silently ignored.
+            let mut wal = Wal::new(config::config_root().join("wal.log"));
+            let _ = wal.append("rules_parse_error", json!({ "error": e }));
+            (
+                Vec::new(),
+                Some(format!(
+                    "rules could not be read, so none were applied: {e}"
+                )),
+            )
+        }
+    }
+}
+
 fn handle(records_root: &std::path::Path, msg: Value) -> Value {
     let id = msg.get("id").cloned().unwrap_or(Value::Null);
     let method = msg.get("method").and_then(|v| v.as_str()).unwrap_or("");
@@ -137,6 +178,38 @@ fn dispatch(records_root: &std::path::Path, method: &str, params: Value) -> Resu
                 .ok_or("missing path")?;
             let p = set_records_root(new)?;
             Ok(json!({ "records_root": p.to_string_lossy() }))
+        }
+        "plan_save" => {
+            // A preview is the dry run of the commit, not a second
+            // implementation: both use the same drafts and the same rules.
+            let request: lilac_core::PlanRequest =
+                serde_json::from_value(params).map_err(|e| e.to_string())?;
+            let (cfg, _) = load_config();
+            let rules_text = std::fs::read_to_string(config::rules_path()).unwrap_or_default();
+            let plan = plan_with_rules(records_root, &request, &cfg, &rules_text);
+            serde_json::to_value(plan).map_err(|e| e.to_string())
+        }
+        "commit_save" => {
+            let plan: lilac_core::SavePlan =
+                serde_json::from_value(params.get("plan").cloned().ok_or("missing plan")?)
+                    .map_err(|e| e.to_string())?;
+            let report = lilac_core::commit_plan(records_root, &plan);
+            serde_json::to_value(report).map_err(|e| e.to_string())
+        }
+        "plan_path" => {
+            // The preview recomputes the filename after the user edits a title
+            // or folder, so the shown path stays the path that will be written.
+            let record: Record =
+                serde_json::from_value(params.get("record").cloned().ok_or("missing record")?)
+                    .map_err(|e| e.to_string())?;
+            let path = record_path(records_root, &record);
+            let relative = path
+                .strip_prefix(records_root)
+                .ok()
+                .and_then(|p| p.to_str())
+                .map(|p| p.replace('\\', "/"))
+                .unwrap_or_else(|| path.to_string_lossy().replace('\\', "/"));
+            Ok(json!({ "path": relative, "filename": record_filename(&record) }))
         }
         "save_record" => {
             let record_val = params.get("record").cloned().ok_or("missing record")?;
@@ -628,6 +701,7 @@ fn idx_records_to_json(idx: &lilac_core::Index) -> Value {
                 "type": e.r#type,
                 "title": e.title,
                 "tags": e.tags,
+                "url": e.url,
                 "path": e.path,
                 "created": e.created,
                 "modified": e.modified,
@@ -831,5 +905,126 @@ mod tests {
             }),
         );
         assert!(partial["result"]["placement"].is_null());
+    }
+
+    fn plan_params(source: &str) -> Value {
+        json!({
+            "source": source,
+            "tabs": [
+                { "url": "https://a.example/one", "title": "Alpha", "group": "Design" },
+                { "url": "https://b.example/two", "title": "Beta", "group": "Design" }
+            ]
+        })
+    }
+
+    #[test]
+    fn preview_and_commit_write_exactly_the_planned_drafts() {
+        test_config();
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        let planned = call(root, "plan_save", plan_params("group"));
+        assert_eq!(planned.get("ok").and_then(|v| v.as_bool()), Some(true));
+        let plan = planned["result"].clone();
+        let drafts = plan["records"].as_array().unwrap();
+        assert_eq!(drafts.len(), 3);
+        assert_eq!(drafts[2]["record"]["type"].as_str(), Some("collection"));
+        assert_eq!(drafts[2]["record"]["saved_from"].as_str(), Some("group"));
+        // Nothing is written by planning.
+        assert!(!root.join("Records").exists());
+
+        let committed = call(root, "commit_save", json!({ "plan": plan }));
+        let report = &committed["result"];
+        assert_eq!(report["written"].as_array().unwrap().len(), 3);
+        assert!(report["failed"].as_array().unwrap().is_empty());
+
+        // Every draft's written path is the path the preview showed.
+        for draft in drafts {
+            let expected = draft["path"].as_str().unwrap();
+            let found = report["written"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|written| written["path"].as_str() == Some(expected));
+            assert!(found, "preview path {expected} was not written");
+            let full = root.join(expected);
+            let (written, body) = read_record(&full).unwrap();
+            assert_eq!(written.id, draft["id"].as_str().unwrap());
+            assert_eq!(body.unwrap_or_default(), draft["body"].as_str().unwrap());
+        }
+    }
+
+    #[test]
+    fn an_excluded_draft_is_skipped_not_written() {
+        test_config();
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let mut plan = call(root, "plan_save", plan_params("selection"))["result"].clone();
+        plan["records"][0]["excluded"] = json!(true);
+        let excluded_id = plan["records"][0]["id"].as_str().unwrap().to_string();
+        let excluded_path = plan["records"][0]["path"].as_str().unwrap().to_string();
+
+        let report = call(root, "commit_save", json!({ "plan": plan }));
+        let skipped = report["result"]["skipped"].as_array().unwrap();
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].as_str(), Some(excluded_id.as_str()));
+        assert_eq!(report["result"]["written"].as_array().unwrap().len(), 2);
+        assert!(!root.join(&excluded_path).exists());
+    }
+
+    #[test]
+    fn a_duplicate_page_is_reported_in_the_preview() {
+        test_config();
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let one = json!({
+            "source": "page",
+            "tabs": [{ "url": "https://same.example/one", "title": "One" }]
+        });
+        let first = call(root, "plan_save", one.clone())["result"].clone();
+        call(root, "commit_save", json!({ "plan": first }));
+
+        let second = call(root, "plan_save", one)["result"].clone();
+        let draft = &second["records"][0];
+        assert!(draft["duplicate_of"].is_string());
+        assert!(
+            draft["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|w| w.as_str().unwrap_or("").contains("already saves"))
+        );
+    }
+
+    #[test]
+    fn a_broken_rules_file_becomes_a_plan_warning() {
+        // The parser is what decides; the host turns its failure into a
+        // warning instead of blocking the save.
+        let (rules, warning) = parse_save_rules("this is not a rule");
+        assert!(rules.is_empty());
+        assert!(warning.unwrap().contains("could not be read"));
+
+        let (rules, warning) = parse_save_rules("");
+        assert!(rules.is_empty());
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn a_broken_rules_file_does_not_stop_the_plan() {
+        test_config();
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let request: lilac_core::PlanRequest = serde_json::from_value(plan_params("page")).unwrap();
+        let cfg = config::Config {
+            rules: config::RuleRuntimeConfig { auto_apply: true },
+            ..config::Config::default()
+        };
+        let plan = plan_with_rules(root, &request, &cfg, "this is not a rule");
+        assert_eq!(plan.records.len(), 2);
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|w| w.contains("could not be read"))
+        );
     }
 }

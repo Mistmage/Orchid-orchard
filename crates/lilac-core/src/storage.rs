@@ -490,6 +490,10 @@ pub struct IndexEntry {
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    /// The page's URL, carried so duplicate detection and previews do not have
+    /// to open every file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
     pub path: String,
@@ -586,6 +590,7 @@ pub fn rebuild_index(records_root: &Path) -> Result<Index, Error> {
                 title: rec.title,
                 tags: rec.tags,
                 status: rec.status,
+                url: rec.url,
                 folder: rec.folder,
                 path: rel,
                 created: rec.created,

@@ -10,6 +10,7 @@ pub mod formula;
 pub mod naming;
 pub mod record;
 pub mod rules;
+pub mod save_plan;
 pub mod session;
 pub mod storage;
 pub mod template;
@@ -48,6 +49,10 @@ pub use record::Record;
 pub use rules::{
     Action, Condition, Rule, RulePreview, RuleSet, Value, apply_rules, apply_rules_reported,
     parse_rules, preview_rules,
+};
+pub use save_plan::{
+    CommitReport, FailedDraft, PlanDuplicate, PlanRequest, PlanTab, SaveDraft, SavePlan,
+    WrittenDraft, commit_plan, plan_save,
 };
 pub use session::{OpenReport, RecordSession, fingerprint};
 pub use storage::{

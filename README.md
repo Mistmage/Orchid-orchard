@@ -23,7 +23,7 @@ Markdown + YAML records on disk.
 ## Requirements
 
 - Rust stable (MSVC target on Windows).
-- Node 20+ and npm.
+- Node 22.12+ and npm.
 - WebView2 runtime (installed by default on current Windows).
 
 ## Build and run
@@ -230,6 +230,20 @@ of creating duplicates. Reopening puts the window back at its saved position
 when that display still exists; otherwise the bounds are clamped to a visible
 display, or the workspace opens as a group, and the popup says what changed.
 Geometry is a hint with rules in Rust, and no display id is stored.
+
+## Save preview
+
+A save is planned before it becomes a file. The popup shows one record in full
+detail or several records as a list: you can correct the title, folder, tags,
+description or body, open any row for detail, and leave individual records out.
+Excluding a tab also removes it from the collection being saved, and cancelling
+writes nothing. Rules, naming and placement run at plan time, so the preview
+already shows the folder and filename the save will use, even after a
+correction.
+
+**Save page instantly** is a setting, off by default: when on, saving a single
+page skips the preview. Rules, duplicate reporting and placement still run.
+Selections, groups, windows, workspaces and snapshots always show the preview.
 
 ## Bases
 

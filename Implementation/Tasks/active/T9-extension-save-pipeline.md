@@ -12,6 +12,38 @@ related:
 
 # T9 — Save preview, exclusion, instant save
 
+Shipped:
+
+- The save pipeline is one plan and one commit in Rust:
+  `crates/lilac-core/src/save_plan.rs` builds `SavePlan { source, records,
+  duplicates, warnings }` without writing, and `commit_plan` writes exactly the
+  drafts it is given. The host exposes `plan_save`, `commit_save` and `plan_path`
+  (recomputes the shown path after an edit).
+- Plans run in the same order as a save: naming, folder placement (rejecting
+  escapes with a warning), rules, duplicate detection and title fallback.
+  Duplicate pages are reported with `duplicate_of` and in `duplicates`; they are
+  not dropped yet (T10 owns that decision).
+- The popup has a preview view. One record opens in detail with every field,
+  the body, the file path and its warnings; several records show a list with an
+  include checkbox per row and a Details button. Both forms allow corrections to
+  title, folder, tags, status, description, URL, simple extra fields and body.
+  Cancel writes nothing; commit reports written, skipped and failed records.
+- Excluding a page also removes its `[[id]]` entry from the set it belongs to,
+  and a corrected page title/URL is copied into that set's entries, so a saved
+  collection cannot point at an old value or a record that was not written.
+- The header saves (tab, selection, group, window, snapshot) and a new
+  Workspaces save all go through `startSave` → preview. Workspace update stays a
+  direct in-place update. A snapshot captures its asset before the plan so the
+  preview can show it; cancelling leaves only an unused content asset.
+- **Save page instantly** replaces the old one-off confirm. It is off by
+  default, persists in extension storage, and skips the preview only for a
+  single page save. Rules, naming, placement and duplicate detection still run.
+
+Verified: core plan tests cover preview/commit agreement, exclusion, duplicate
+reporting, folder warnings, workspace geometry, edited folder/title paths and
+set pruning. Host tests cover preview/commit agreement, exclusion, duplicates,
+broken rules and paths.
+
 ## Goal
 
 Every save is inspectable before it becomes a file, and "write immediately" is a
